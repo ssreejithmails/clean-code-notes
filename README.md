@@ -6,6 +6,9 @@ class Service {
 }
 class LdapQuery implements UserDetailsFinder{
 
+* Adapter returns Entity
+
+
 # 
 
 ![image](https://user-images.githubusercontent.com/28539288/124505266-14945e00-dd97-11eb-844a-899307286eff.png)
