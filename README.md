@@ -7,7 +7,7 @@ class Service {
 class LdapQuery implements UserDetailsFinder{
 
 * Adapter returns Entity
-
+* Conversion to entity and validation goes hand in hand. It makes more sense to do validation in the facade layer
 
 # 
 
