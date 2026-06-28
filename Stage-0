@@ -1,49 +1,394 @@
-# AI Review & Generation Prompts — Stage 1 through Stage 7
+# Idea-to-Code Engineering Workflow — Complete Skill Set
+### [Organization Name] — Full Process, AI Skills, and Portfolio Planning
 
-Built for **Claude Code** (or an equivalent agent with filesystem/repo access). Covers generation steps (Stage 2-Draft, Stage 3-Implement) and review steps (Stage 1, 2a–2d, 3 review, 3-Security, 3-Infra, 4–7) across the full workflow. Each prompt assumes the agent can read the repository, run search/grep, and read existing docs (Confluence exports, ADRs, schema files) if you point it at them.
+This single document consolidates everything built so far: the end-to-end process definition, the full library of stage-agnostic AI skills, and the portfolio-level PI Planning skill. The AI skills are designed to run in any order — each names the artifacts it needs and the artifact it produces, rather than depending on a fixed position in a sequence.
 
-**How to use these:**
-- Drop the relevant prompt into Claude Code at the matching stage, with the ticket/Design Doc link filled in.
-- Every prompt ends with a **required output format** — keep that, so findings can be pasted straight into Jira/Confluence and stay consistent reviewer-to-reviewer.
-- Every prompt includes a grounding instruction (don't speculate, read the actual files) — this is what makes the difference between a real review and a generic one.
-- Stage 2 has two parts: **Stage 2-Draft generates** the Design Doc, **Stage 2a/2b/2c/2d review and plan** against it (architecture, NFRs, data model, and test strategy respectively). The architect is accountable for the final design either way — the draft just removes the blank-page problem and front-loads the codebase research.
-- **Stage 2d (Test Strategy)** decides *what kind* of testing this change needs — and at what pyramid layer — before implementation starts. This exists precisely because "write tests" left implicit defaults to thin unit-test coverage and skips the cross-service contract tests that actually catch the failures this whole workflow is designed to prevent.
-- **Stage 3 has three review angles, run as separate sessions from the implementing agent and from each other:** correctness/design-conformance (Stage 3 review), security at the code level (Stage 3-Security — distinct from Stage 2's design-level security sign-off, since secure designs can still have insecure implementations), and infrastructure/IaC where applicable (Stage 3-Infra). None of these substitute for the human merge gate — they're evidence the human approver uses, not the approval itself.
+**Every skill in Part 2 ends with a mandatory Self-Verification section** — what it directly confirmed with evidence, what it couldn't verify and why, what it's asserting with some confidence but no hard proof, and what the next skill in the chain should specifically watch for. Review skills use a Verified / Could Not Verify / Confident But Not Proven shape; generation skills use a Grounded / Assumed / Could Not Verify shape, since they're verifying an artifact they just produced rather than claims someone else made. This isn't an optional footer — it's the mechanism that lets downstream skills (and human reviewers) know exactly which parts of an upstream skill's output to trust as-is versus double-check.
+
+`design-doc-generation` also decides whether to produce a Mermaid architecture/flow diagram: required when the change is Medium/High complexity or alters an existing flow, otherwise it asks rather than silently deciding either way.
 
 ---
 
-## Stage 0 — PRD Generation
+## Table of Contents
 
-*(Runs at intake, before Stage 1. Produces a first full draft for the PM to edit and finalize — same pattern as Stage 2-Draft. This is what Stage 1 and Stage 2-Draft below should be reading, not a one-line ticket summary.)*
+**Part 1 — The Workflow** *(the process itself: stages, gates, roles, rollout — described sequentially as a reference for how an organization typically runs this, though the underlying skills in Part 2 don't require that exact order)*
+- Guiding Principles · Risk Tiering · The Workflow stages · Tier 1 Fast Path · Emergency Change Path
+- Roles (RACI) · AI Agent Access Boundaries · Self-Enforcing in Jira + Confluence
+- How This Maps to Your Stated Drivers · Suggested Rollout · Portfolio-Level Planning (pointer to Part 3)
+
+**Part 2 — AI Skills** *(stage-agnostic — each names its required inputs and produced artifact; run in any order your situation calls for)*
+- requirement-vetting · prd-generation · system-impact-analysis · dependency-heads-up
+- design-doc-generation · design-review · nfr-review · data-model-review · test-strategy
+- story-creation · dependency-firm-ask · implementation · implementation-review
+- security-review · infra-review · verification-review · release-readiness-review
+- post-release-validation · retrospective-review
+
+**Part 3 — PI Planning Skill** *(portfolio-level, separate from the per-feature skills above)*
+- Phase 1 — Data Sufficiency Gate · Phase 2 — Backward Schedule & Sprint Grid
+
+---
+
+# Part 1 — The Workflow
+
+**Context this was designed for:** multiple teams building one platform on a microservices architecture, scheduled release trains (weekly/biweekly/monthly), formal DB schema review already in place, architects/tech leads own design decisions, operating in a regulated industry, using Jira + Confluence.
+
+**Problems this is designed to fix:** production incidents caused by missed system impacts, mismatches between what was asked for and what got built, NFRs discovered too late, weak audit trail for compliance, and a process that's currently too slow and inconsistent.
+
+---
+
+## 0. Guiding Principles
+
+1. **Proportional rigor.** Not every change deserves the same ceremony. A copy fix and a new cross-service payment flow should not go through the same number of gates — applying full process everywhere is exactly what kills speed.
+2. **Single source of truth.** Every line of code should trace back to an idea → a design decision → an approval, with no detours through Slack threads that disappear.
+3. **Shift NFRs left.** Performance, security, and scalability requirements are written down *before* code is written, not discovered in a load test or an incident.
+4. **System-aware by default.** Before anything is built, someone explicitly asks "what else does this touch?" — across services, data, and teams.
+5. **Audit-by-default.** Compliance evidence is a *byproduct* of doing the work normally (timestamped approvals, linked docs), not a separate scramble before an audit.
+
+---
+
+## 1. Risk Tiering — Decide This First
+
+Every idea gets tagged with a tier the moment it's taken seriously. The tier determines how much of the process below actually applies. This single mechanism is what lets you go faster on small things and stay rigorous on the things that can actually hurt you.
+
+| | **Tier 1 — Low** | **Tier 2 — Standard** | **Tier 3 — High** |
+|---|---|---|---|
+| **Examples** | Bug fix, copy change, internal tooling tweak | New feature within one service, minor API addition | New service, cross-service flow, schema change, new external integration |
+| **Services touched** | 1, no contract change | 1–2, additive contract change | 2+, or breaking contract change |
+| **Data sensitivity** | None / non-sensitive | Internal business data | PII / PHI / financial data |
+| **Customer-facing** | No | Maybe | Core flow (checkout, auth, claims, etc.) |
+| **Security impact** | None | Low | Auth, data access, new attack surface |
+| **Required process** | Lightweight (see §3) | Standard (full flow, async approvals) | Full (live design review, security/compliance sign-off) |
+
+**Auto-escalation rule:** if a change touches the data model, PII/PHI/financial data, auth, infrastructure/IaC (new compute, network rules, IAM/permissions changes), or crosses a service boundary with a breaking change, it is **automatically Tier 3**, regardless of how small it feels.
+
+---
+
+## 2. The Workflow
+
+```
+VETTING → IDEA+PRD → IMPACT ANALYSIS → DEP. HEADS-UP → DESIGN + NFRs → TEST STRATEGY → STORIES → DEP. FIRM ASK → IMPLEMENTATION → VERIFICATION → RELEASE APPROVAL → DEPLOY → RETRO
+(gate: PM    (gate: PRD    (gate: owners       (gate: ack'd        (gate: arch/      (gate: plan      (gate: PM/   (gate: committed/  (PR linked        (NFR + pyramid   (gate: change      (post-release      (feeds back
+ reviews)     + tier)       notified)           by SLA)             sec sign-off)     approved)        eng confirm)  conditional/        to design doc)    evidence         record)             health check)      into tiering)
+                                                                                                                       conflict)                            attached)
+```
+
+### Stage -1 — Requirement Vetting
+- **Owner:** Requester/PM, with AI doing the legwork before the PRD is drafted.
+- **Activity:** Before a PRD is written, check the raw idea against: the actual codebase (does this already exist, partially exist, or conflict with existing code?), past similar stories/tickets (was this tried or explicitly rejected before, and why?), and platform facts (known capacity constraints, roadmap conflicts, standing ADR decisions this would contradict). This exists because a PRD locks in a problem statement and acceptance criteria — if the premise is already flawed, every downstream stage inherits a clean-looking document built on a bad foundation.
+- **Artifact:** Vetting Note — short, attached to the idea ticket: prior art found, related past tickets and their outcomes, relevant platform constraints, and any direct conflicts with existing ADRs.
+- **Gate:** PM reviews the Vetting Note before Stage 0 starts. If it surfaces something that should change the ask (already exists, was rejected for a still-valid reason, conflicts with a roadmap commitment), that gets resolved here — not discovered mid-Design-Review three stages later.
+
+### Stage 0 — Intake & PRD
+- **Owner:** Requester/PM drives intake; PM is accountable for the finalized PRD.
+- **Activity:** AI agent drafts a full PRD from the initial idea/ask **and the Stage -1 Vetting Note** — problem statement, target user/business context, requirements, explicit acceptance criteria, success metrics, and **explicit non-goals** (what this is deliberately not solving, so scope doesn't silently expand later). Any prior art, past-rejection context, or platform constraint surfaced in vetting gets reflected directly in the PRD (e.g. as a non-goal, or as a note on why this differs from the prior attempt). PM reviews, corrects, and finalizes — same pattern as Stage 2-Draft: the draft removes the blank-page problem, the PM remains accountable for what the org commits to building.
+- **Artifact:** PRD (Confluence template) — this is what Stage 1 and Stage 2-Draft actually read, not a one-line ticket summary. Linked Jira Epic carries the PRD link, not a duplicate of its content.
+- **Gate:** PM/EM assigns an initial Risk Tier based on the PRD (can be revised at Stage 1). Nothing moves to Discovery without a tier and an approved PRD.
+- *Tier 1 uses a lightweight version: problem + acceptance criteria, no full PRD template — see §3.*
+
+### Stage 1 — Discovery & System Impact Analysis
+- **Owner:** Tech lead/architect assigned to the idea, plus owners of any service suspected to be affected.
+- **Activity:** Map every service, data flow, API/event contract, **and infrastructure dependency** (new/changed compute, queues/topics, env vars, IAM/permissions, network rules) the approved PRD's requirements touch — upstream and downstream — and flag any **new external/third-party dependency** (new package, new SaaS integration) likely needed. This is the direct fix for "incidents from missed system impact." Infra changes and new external dependencies are flagged here explicitly because they're easy to miss if the analysis only looks at internal services, and they carry their own license/supply-chain/compliance review needs.
+- **Artifact:** "System Impact Map" (Confluence template) — services touched, owning teams, integration points, infra/IaC touched, blast-radius notes.
+- **Gate (Tier 2/3):** Each affected service owner acknowledges the map (a comment/checkbox is enough — the point is they can't be surprised later). **If infra/IaC is touched, platform/SRE team is added as an acknowledging owner.**
+- *Tier 1 skips this stage entirely.*
+
+### Stage 1.5 — Dependency Coordination (Early Heads-Up)
+- **Owner:** Tech lead/architect who ran Stage 1, addressed to the owning lead of each dependent team identified in the Impact Map.
+- **Activity:** For every cross-team dependency the Impact Map found, send a structured early-warning notice — rough shape of what's needed, why, and roughly when — *before* design work locks in scope. This is deliberately lightweight: it exists so a dependent team's lead isn't blindsided three sprints later by a fully-formed ask they have zero capacity for. It is not yet a commitment request.
+- **Artifact:** Dependency Notice per affected team — what's likely needed, rough timing, who to talk to if this conflicts with their existing roadmap.
+- **Gate:** Each notified team lead acknowledges receipt (not commitment) within an agreed SLA (e.g. 2 business days). A non-response after the SLA escalates to both tech leads' managers — silence is not a yes, but it also can't be allowed to silently stall the requesting team.
+
+### Stage 2 — Design & NFR Definition
+- **Owner:** Tech lead/architect (matches your existing ownership model).
+- **Activity:** AI agent (Claude Code, with repo + Stage 1 Impact Map access) produces a first full draft of the Design Doc, tagging each section as grounded-in-code, inferred, or "needs architect decision." Architect reviews, corrects, and finalizes — the architect remains accountable for the design; the draft just removes the blank-page problem and front-loads the codebase research. Final doc (Confluence template) covers: problem, proposed approach, alternatives considered and rejected, data model changes (or explicitly "none"), and a **mandatory NFR section**:
+  - Performance/latency target
+  - Expected load & scalability ceiling
+  - Availability/SLA expectation
+  - Security & data classification
+  - Observability plan (what gets logged/alerted)
+  - Backward compatibility / migration plan
+  - Cost impact (infra spend)
+- **If data model changes are involved:** this routes into your existing formal schema review — keep that process as-is, just make it a tracked, mandatory sub-step here so it stops being inconsistent.
+- **Artifact:** Approved Design Doc + an ADR (Architecture Decision Record) entry for any consequential decision, so "why we did it this way" survives staff turnover.
+- **Gate (Tier 2/3):** Architecture review sign-off, recorded in Confluence/Jira. **Tier 3 in your regulated context adds a Security/Compliance reviewer to this same gate** — this is what produces your audit trail, for free, at the point the decision is actually made.
+
+### Stage 2d — Test Strategy
+- **Owner:** Tech lead/architect, with input from QA.
+- **Activity:** Before any code is written, decide what kind of testing this specific change needs and at what pyramid layer — unit, integration, contract (for every cross-service boundary in the Stage 1 Impact Map), end-to-end, and a concrete verification method for each NFR target from Stage 2 (load test for performance, security scan for the security target, etc.). This is a deliberate, separate step because "write tests" left implicit defaults to thin unit coverage and skips exactly the cross-service contract tests this workflow exists to enforce.
+- **Artifact:** Test Strategy doc — test pyramid table, NFR-to-verification-method mapping, explicit out-of-scope notes, and any standing contract-test gaps surfaced along the way.
+- **Gate (Tier 2/3):** Test plan reviewed alongside the Design Doc — implementation does not start until both are approved together.
+
+### Stage 2e — Story Creation
+- **Owner:** Tech lead/architect drafts via AI; engineer (or PM, for user-facing acceptance criteria) confirms before work starts.
+- **Activity:** AI agent breaks the approved Design Doc and Test Strategy into Jira stories/tasks. Each story is a **vertical slice** — it cuts through every layer the feature touches end-to-end (UI/API/service/data, as applicable), not a horizontal slice of a single layer — with explicit acceptance criteria traceable back to a specific PRD requirement and a specific part of the design, not generic restatements of the design doc. Each story should be implementable on its own without the engineer (or implementing AI agent) needing to re-derive scope from the design doc from scratch. This exists because "design is broken into stories" left implicit was producing vague, horizontally-sliced stories that an AI implementer would fill gaps in with assumptions instead of flagging — the same failure mode Stage 3-Implement's "stop and ask" instruction exists to prevent, just one step earlier.
+- **HITL/AFK tagging:** Every story is tagged **HITL** (Human-In-The-Loop — requires a human decision point, such as an architectural judgment call, ambiguous UX decision, or anything Stage 1/2 flagged as an open question) or **AFK** (Away-From-Keyboard — implementable and mergeable through Stage 3/4 without a human decision mid-stream; the human merge gate at Stage 3 still applies regardless). This tag is what lets you actually run Tier 2/3 work through AI implementation efficiently: AFK stories queue straight into Stage 3-Implement, HITL stories get routed to a human decision first so the implementing agent isn't left guessing.
+- **Artifact:** Jira stories/tasks, each linked to: the PRD requirement it satisfies, the Design Doc section it implements, the Test Strategy layer(s) it's responsible for, and its HITL/AFK tag.
+- **Gate (Tier 2/3):** Engineer/PM confirms the story breakdown actually covers the full design (nothing dropped), doesn't introduce scope the design didn't approve (nothing added), is sliced vertically rather than by layer, and has a sensible HITL/AFK tag before Stage 3 begins.
+
+### Stage 2e.5 — Dependency Coordination (Firm Ask)
+- **Owner:** Tech lead/architect, addressed to the owning lead of each dependent team.
+- **Activity:** Now that stories exist, convert each Stage 1.5 heads-up into a specific, answerable ask: exactly which stories depend on the other team, exactly what's needed from them (an API contract, a schema change, a feature flag, capacity on their sprint), and a proposed target sprint/date. The ask is written so the other team's lead can say yes, no, or "not until sprint X" without needing a meeting just to understand the question.
+- **Artifact:** Dependency Request per affected team, structured as: what we need, by when, what happens if it slips (impact on our timeline), and an explicit question set (see prompts file) rather than an open-ended ask.
+- **Gate (Tier 2/3):** Each dependent team lead responds with one of: **Committed** (date confirmed, capacity allocated), **Conditional** (date possible if X happens first — name X), or **Conflict** (can't meet this without something else slipping — name what). "Conflict" responses escalate to both teams' managers for prioritization; they don't just sit unresolved. No story that depends on an uncommitted external team proceeds past this gate as AFK — it's auto-tagged HITL regardless of what Stage 2e said, since "wait for another team" is exactly the kind of mid-stream decision AFK is supposed to exclude.
+
+### Stage 3 — Implementation
+- **Owner:** Engineering team (accountable for the result; AI agent does the initial writing).
+- **Activity:** **AFK-tagged** stories from Stage 2e queue straight into implementation; **HITL-tagged** stories get their flagged decision resolved by a human first, then proceed the same way. An AI agent (Claude Code, with repo access) implements the Stage 2e stories one at a time, against the approved Design Doc, building tests exactly to the layers scoped in the Stage 2d Test Strategy (not inventing test scope on the fly), and stopping to flag anything underspecified rather than guessing — including flagging a story that turns out to need a human decision the HITL/AFK tag didn't anticipate. A **different** AI session reviews the diff against the design/NFRs/security (Stage 3 review + Stage 3-Security prompts) — never the same session that wrote the code, since it shares the same blind spots.
+- **Gate (all tiers, no exceptions):** A human engineer must explicitly approve the PR before merge. "AI writes the implementation" does not mean AI merges it — the engineer reviewing is the named, accountable approver of record, the same as if a junior engineer had opened the PR. This approval is what the audit trail actually points to; an AI review pass is supporting evidence, not the approval itself.
+- **Gate (Tier 3, recommended Tier 2 touching auth/data access):** Code-level security review (distinct from the design-level security sign-off at Stage 2) — a design can be approved as secure and the implementation can still introduce a vulnerability the design never specified at that granularity.
+- **Practice:** Short-lived branches, feature flags for anything that won't be release-ready by the next train, so trunk stays deployable. Branch protection enforces the human-approval gate technically, not just procedurally.
+
+### Stage 4 — Verification & NFR Validation
+- **Owner:** Engineering + QA.
+- **Activity:** Functional tests, plus explicit validation against the NFR targets set in Stage 2 (load test, security scan, etc.) and the test pyramid layers scoped in Stage 2d — confirm every layer the plan called for (unit/integration/contract/e2e) actually shows up in the diff, not just whichever was easiest to write. **Tier 3 requires attached evidence** before sign-off — this is the fix for "NFRs discovered too late."
+- **Artifact:** Test evidence attached directly to the Jira ticket.
+
+### Stage 5 — Release Readiness & Change Approval
+- **Owner:** Release manager (lightweight CAB — appropriate given regulated + scheduled releases).
+- **Activity:** Before each release train, a short review of what's going out: tier, rollback plan, who approved each item. Tier 1 = simple checklist. Tier 2/3 = explicit recorded sign-off.
+- **Artifact:** Release Record (Confluence page) — this is the page an auditor gets pointed to. It links idea → design approval → impact map → test evidence → this approval, end to end.
+
+### Stage 6 — Deploy & Post-Release Validation
+- **Owner:** Engineering/SRE.
+- **Activity:** Deploy with the release train, watch the dashboards defined in the NFR section, explicit rollback trigger defined in advance (not improvised mid-incident).
+- **Artifact:** Post-release health check sign-off within 24–48h.
+
+### Stage 7 — Retrospective
+- **Owner:** PM/Tech lead.
+- **Activity (Tier 3, any incident, or emergency change):** Did the actual impact match the predicted impact? Was anything missed? Feed it back into the Impact Map template or the tiering rules themselves. This is what makes the process improve instead of calcify.
+- **Activity (Tier 1/2 — sampled, not every change):** Periodically (e.g. one in N Tier 2 changes per sprint, picked at random rather than self-selected) run the same predicted-vs-actual check. Tier 3 work is rare and high-stakes, but it's also a biased sample — if you only ever learn from your riskiest changes, you'll never catch the patterns that show up in your much more frequent Tier 1/2 work. This sampling is what keeps the tiering rules honest instead of just reinforcing whatever Tier 3 happened to teach you.
+
+---
+
+## 3. Tier 1 Fast Path
+
+To make sure the rigor above doesn't slow down trivial work, Tier 1 changes get a deliberately thin path: a quick prior-art check (does this already exist — a single search, not a full Vetting Note) → ticket with problem + acceptance criteria (no full PRD) → PR (linked to ticket, no design doc, story breakdown, or separate test strategy required — engineer/agent uses standard test conventions for the area) → standard tests → merge → included in next release's checklist as a single line item. No formal vetting note, no impact map, no design doc, no test strategy doc, no separate story-creation step, no extra sign-off. If a "Tier 1" change turns out to touch the data model or cross a service boundary once someone's in the code, it gets auto-bumped to Tier 2 before merge — that's a process bug to fix, not an exception to quietly allow.
+
+---
+
+## 3.5 Emergency Change Path
+
+Scheduled release trains are right for planned work, but production incidents don't wait for the next train. Without an explicit emergency path, people will go around this process during exactly the moments when bypassing it is most dangerous — and your audit trail will have a hole at the worst possible time. This path exists so "emergency" stays an exception with its own record, not an unofficial way to skip the process whenever something feels urgent.
+
+- **Trigger:** Active production incident or a fix that genuinely cannot wait for the next release train (defined narrowly — "we want this faster" is not an emergency; this is for active customer/data impact).
+- **Process:** Incident commander or on-call lead declares an emergency change. Fix is implemented and reviewed with whatever subset of Stages 3/3-Security/4 is actually feasible in the time available — but never skips the human merge gate or, for anything touching auth/data/schema, the security review (Stage 3-Security). What gets compressed is ceremony (async sign-offs, full design doc), not the safety-critical checks themselves.
+- **Approval:** A single accountable approver (on-call lead/incident commander) can approve in the moment; this is recorded immediately, not retroactively reconstructed.
+- **Mandatory follow-up:** Within 48 hours, the change gets a retroactive Stage 1 Impact Map and Stage 5-equivalent Release Record filed — same artifacts as planned work, just sequenced after the fact instead of before. This keeps the audit trail complete and feeds Stage 7 (Retrospective) the same way an incident always should.
+- **Tracking:** Emergency changes are tagged distinctly in Jira and reported on separately — if this path gets used often, that's a signal your release cadence or Tier 1 fast path needs adjusting, not that the emergency path is working as intended.
+
+---
+
+## 4. Roles (RACI)
+
+| Stage | Requester/PM | Tech Lead/Architect | Other Service Owners | Security/Compliance | QA | Release Manager |
+|---|---|---|---|---|---|---|
+| Requirement Vetting | R/A | I | – | – | – | – |
+| Intake & PRD | R/A | C | – | – | – | – |
+| Impact Analysis | I | R | A (per service) | I (Tier 3) | – | – |
+| Dependency Heads-Up | I | R/A | R (per dependent team) | – | – | – |
+| Design + NFRs | C | R/A | C | A (Tier 3) | C | – |
+| Test Strategy | I | R/A | I | C (Tier 3) | R | – |
+| Story Creation | C | R/A | I | – | I | – |
+| Dependency Firm Ask | I | R/A | R/A (per dependent team) | – | – | – |
+| Implementation | I | C | I | – | C | – |
+| Verification | I | C | – | I (Tier 3) | R | – |
+| Release Approval | I | C | – | A (Tier 3) | I | R/A |
+| Post-Release | I | A | I | – | – | R |
+
+*(R = Responsible, A = Accountable, C = Consulted, I = Informed)*
+
+---
+
+## 4.5 AI Agent Access Boundaries
+
+Given how much of this workflow now runs through an AI agent with repo/filesystem access, this needs to be a written control, not an assumption — especially in a regulated environment where "what could the AI read or do" is a question an auditor will ask directly.
+
+- **Credentials/secrets:** The agent's working environment must not have access to production credentials, real API keys, or live database connection strings. Use sandboxed/dev credentials only, or run the agent against a repo checkout with secrets stripped/mocked. If a `.env` or secrets file exists in the repo, it should be in `.gitignore`/excluded from the agent's readable paths the same way it's excluded from version control.
+- **Data access:** The agent should not be given access to production data, including production database dumps used for "realistic" testing, or real customer records in any form. Use synthetic/anonymized fixtures. This is a hard line in a regulated industry handling PII/PHI/financial data — not a nice-to-have.
+- **Execution scope:** Define explicitly whether the agent can run code/tests locally (generally yes, needed for the workflow above) versus deploy, push directly to protected branches, or call external/production APIs (generally no — these stay human-gated actions per Stage 3/5/6).
+- **Logging:** Agent sessions that touch Tier 2/3 work should have their transcripts retained alongside the other artifacts in the traceability chain (Design Doc, PR, etc.) — if compliance ever asks "what did the AI actually do here," you want a record, not a reconstruction.
+- **Review of the access boundary itself:** Security/compliance should review and approve what the agent's runtime can reach (which repos, which environments, which credentials) as a one-time control setup, the same way they'd review a new CI/CD service account's permissions — because that's functionally what this is.
+
+---
+
+## 5. Making It Self-Enforcing in Jira + Confluence
+
+- Add a required **"Risk Tier"** custom field on the Epic. The workflow blocks transition out of "Discovery" status until it's set.
+- Create eight Confluence templates: *Vetting Note*, *PRD*, *Idea One-Pager* (Tier 1 lightweight version), *System Impact Map*, *Design Doc* (with the NFR section built in, not optional), *Test Strategy* (test pyramid + NFR verification mapping), *ADR*, *Release Record*. Story creation lives in Jira directly (stories linked to PRD/Design Doc/Test Strategy), not a separate Confluence doc.
+- PR template (GitHub/GitLab) requires a Design Doc **and** Test Strategy link for anything Tier 2/3 — make this a checklist item your PR template literally can't be submitted without acknowledging.
+- Because every approval is just a Jira status transition or a Confluence page comment with a name and timestamp, **your audit trail falls out of the normal workflow** instead of being a separate compliance exercise. Have your compliance/security team do a one-time mapping of which stage/artifact satisfies which control (e.g., segregation of duties, change approval, retained records) so it's documented once and not re-litigated every audit cycle.
+
+---
+
+## 6. How This Maps to Your Stated Drivers
+
+| Driver you flagged | Mechanism that addresses it |
+|---|---|
+| Incidents from missed system impact | Mandatory Impact Map + service-owner sign-off (Stage 1) |
+| Cross-team work stalling or surprising dependent teams | Two-touch dependency coordination — early heads-up (Stage 1.5) before scope locks, firm ask with explicit Committed/Conditional/Conflict response (Stage 2e.5) before implementation starts; uncommitted dependencies auto-force a story to HITL regardless of its original tag |
+| Mismatch between idea and what's built | Requirement vetting (Stage -1) catches a flawed premise before it's locked into acceptance criteria; PRD with explicit acceptance criteria and non-goals (Stage 0) then carries through as traceable links on every story (Stage 2e) back to the specific requirement it satisfies |
+| Wasted dev cycles on already-solved or previously-rejected work | Stage -1 checks the codebase, past similar tickets, and platform constraints before any design work starts — this is the cheapest stage to fail fast in, by design |
+| NFRs discovered too late | NFRs are a required section of the Design Doc, mapped to a concrete verification method in Stage 2d, validated with evidence before release (Stage 2, 2d & 4) |
+| Thin/inconsistent test coverage, especially cross-service | Stage 2d makes the test pyramid an explicit, reviewed plan — contract tests for every cross-service boundary are a named requirement, not an assumption |
+| Audit trail / compliance | Every gate is a timestamped, named approval already living in Jira/Confluence — no separate audit-prep work; emergency changes get the same artifacts filed retroactively within 48h |
+| Faster dev cycle | Risk tiering + Tier 1 fast path mean only genuinely risky work pays the full process cost; HITL/AFK tagging at Stage 2e means most Tier 2/3 stories also move at AI speed, with humans only pulled in for the subset that genuinely needs a decision |
+| AI writing code without losing accountability | Explicit human merge gate at every tier (Stage 3), code-level security review separate from design-level (Stage 3-Security), and sampled human re-checks of AI output (§7 rollout metrics) keep a person accountable throughout |
+
+---
+
+## 7. Suggested Rollout
+
+1. **Pilot** with one team on 2–3 real Tier 2/3 initiatives for 4–6 weeks. Don't roll this out org-wide on day one.
+2. **Refine** the tier thresholds and templates based on real friction — they will need adjusting.
+3. **Roll out** platform-wide; make Risk Tier and Design Doc linkage enforced fields/automations in Jira, not just guidance in a wiki page.
+4. **Track these metrics** going forward:
+   - Idea → production lead time, broken out by tier
+   - % of incidents traced to a missed system impact (should trend down)
+   - % of NFR-related defects caught pre- vs post-release (should shift left)
+   - Audit findings related to change management
+   - Dev throughput/cycle time per team (to confirm speed actually improved, not just rigor)
+   - **AI agent reliability:** sample a percentage of AI-drafted designs, test strategies, and AI-written implementations each sprint and have a human independently re-check them. Track false-negative rate (issues the AI review missed that a human catches) and false-positive rate (things it flagged that weren't real issues). Without this, you can't tell whether the process is building real rigor or just a trust exercise shaped like one — and it's the only way to know if the human review gates above can safely get lighter over time, or need to stay exactly as strict as they are now.
+
+---
+
+*This document is a starting framework, not a finished policy — it's meant to be piloted and adjusted with real teams before being mandated platform-wide.*
+
+---
+
+## 8. Portfolio-Level Planning (Separate Artifact)
+
+Everything above operates on one feature at a time. When you're planning a Program Increment across multiple features and teams against a fixed end date, that's a different kind of problem — fitting a portfolio of dependent work into limited team capacity — and it's covered separately in **Part 3 of this document**. It consumes the dependency commitment outcomes from the `dependency-firm-ask` skill and the sized, tagged stories from the `story-creation` skill as its inputs, and refuses to produce a schedule when those inputs are too rough to plan against.
+---
+
+# Part 2 — AI Skills
+
+Built for **Claude Code** (or an equivalent agent with filesystem/repo access). Each skill is self-contained: it names the artifacts it needs as input and the artifact it produces, not a position in a sequence. Run them in whatever order your situation calls for — a skill that needs something you don't have yet will say so in its output rather than silently guessing.
+
+**How to use these:**
+- Each skill lists **Requires** (artifacts it needs, by name) and **Produces** (the artifact it creates). If you don't have a required artifact yet, run the skill that produces it first — but nothing here assumes a fixed order beyond that basic dependency logic.
+- Every skill ends with a **required output format** — keep that, so findings can be pasted straight into Jira/Confluence and stay consistent reviewer-to-reviewer.
+- Every skill includes a grounding instruction (don't speculate, read the actual files) — this is what makes the difference between a real review and a generic one.
+- **Cross-team dependencies get two touches, not one:** `dependency-heads-up` is a lightweight early heads-up (no commitment expected, just acknowledgment and an early conflict flag), sent as soon as a System Impact Map exists. `dependency-firm-ask` is the firm ask (Committed/Conditional/Conflict, forced choice), sent once concrete stories exist. The gap between these exists on purpose — asking for a firm commitment before scope is real just produces a guess dressed up as a date.
+- A Design Doc has two parts: `design-doc-generation` produces the first draft, `design-review` / `nfr-review` / `data-model-review` / `test-strategy` each review and plan against it from a different angle. The architect is accountable for the final design either way — the draft just removes the blank-page problem and front-loads the codebase research.
+- `test-strategy` decides *what kind* of testing a change needs — and at what pyramid layer — before implementation starts. This exists precisely because "write tests" left implicit defaults to thin unit-test coverage and skips the cross-service contract tests that actually catch the failures this whole set of skills is designed to prevent.
+- `story-creation` slices vertically (each story cuts end-to-end through every layer it touches, never isolated to one layer) and tags every story **HITL** (needs a human decision first) or **AFK** (fully specified, can go straight to AI implementation). This is what lets most work move through AI implementation efficiently without quietly trading rigor for speed — AFK stories don't wait on anyone, HITL stories get a human decision before the implementing agent would otherwise have to guess.
+- Implementation has three review angles, run as separate sessions from the implementing agent and from each other: correctness/conformance (`implementation-review`), security at the code level (`security-review` — distinct from `design-review`'s security input, since secure designs can still have insecure implementations), and infrastructure/IaC where applicable (`infra-review`). None of these substitute for a human merge gate — they're evidence the human approver uses, not the approval itself.
+
+---
+
+## requirement-vetting
+
+**Requires:** a raw idea or request, repo access, access to past tickets/stories if available, access to ADRs/architecture/capacity docs if available.
+**Produces:** a Vetting Note — recommendation on whether to proceed, with what's already been tried and what platform constraints apply.
+
+*(Run before writing any requirements document. This is the cheapest place to fail fast — catching a flawed premise here means nobody writes acceptance criteria, a design, or code against something that shouldn't be built as asked. Whatever produces the requirements/PRD afterward should receive this skill's output as an input, not redo this work itself.)*
+
+```
+You are vetting a raw idea/request BEFORE any PRD or requirements document is written. Your job
+is to surface anything that should change the ask or stop it entirely — not to evaluate whether
+it's a good idea on its merits, and not to write requirements yourself.
+
+CONTEXT:
+- Raw idea/ask: [paste the original request, however informal]
+- Repo(s) to check: [paths]
+- Where to search for past tickets/stories: [Jira project(s)/board(s), if accessible; otherwise
+  note what you cannot check]
+- Where platform facts live: [ADR log, architecture docs, capacity/roadmap docs if available]
+
+INSTRUCTIONS:
+1. Codebase check: search for existing functionality that already does what's being asked, fully
+   or partially. Read the actual code, don't infer from naming alone — open files and confirm
+   what they actually do before claiming something exists or doesn't.
+2. Prior-art check: search for past tickets/stories describing the same or a closely related ask.
+   For anything found, note the outcome — was it built, rejected, deprioritized, or abandoned —
+   and if rejected or abandoned, find and state the stated reason, not just that it happened. A
+   past rejection with a reason that no longer holds is different from one that still applies.
+3. Platform constraint check: check ADRs, architecture docs, or capacity/roadmap notes (whatever
+   you have access to) for anything this idea would conflict with — a documented architectural
+   decision it contradicts, a capacity limit it would exceed, a roadmap commitment it competes
+   with for the same resources/timeline.
+4. Do not soften or talk yourself out of a conflict you found — if something contradicts this
+   idea, state it plainly and let the requester/PM decide what to do with that information.
+5. If you cannot check a category (e.g. no access to a roadmap doc), say so explicitly rather than
+   silently skipping it — a vetting note with an honest gap is more useful than one that looks
+   complete but quietly wasn't.
+6. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
+
+OUTPUT FORMAT:
+## Existing Functionality Found
+- [feature/code found] — [file:line] — overlap with this ask: [full/partial/none]
+
+## Related Past Tickets
+- [ticket] — outcome: [built/rejected/abandoned] — stated reason: [quote or summarize] —
+  still applies today: [yes/no/unclear]
+
+## Platform Constraints/Conflicts
+- [ADR/constraint/roadmap item] — conflict: [describe specifically]
+
+## Recommendation
+[Proceed to requirements as-is / Proceed with modifications: specify / Needs a human decision
+before proceeding — here's why]
+
+## Self-Verification
+**Grounded (evidence-backed):**
+- [finding above] — backed by: [file:line, specific ticket, or specific ADR]
+
+**Assumed (no hard evidence, but reasonable):**
+- [finding above] — assumption: [what's being assumed] — risk if wrong: [concrete consequence]
+
+**Could Not Verify / Gaps:**
+- [category you couldn't check] — blocked by: [no access to X / not searchable / etc.] — who can
+  unblock: [role/team]
+
+**For the Next Skill (PRD generation):**
+- [which findings the PRD should treat as settled vs. flag as an open question vs. resolve before
+  proceeding]
+```
+
+---
+
+## prd-generation
+
+**Requires:** the raw idea/ask; a Vetting Note if one exists (recommended, not strictly required).
+**Produces:** a PRD — problem statement, acceptance criteria, non-goals, success metric.
+
+*(Produces a first full draft for a Product Manager to edit and finalize. If a Vetting Note exists, this skill should read it and reflect its findings; if none exists, it proceeds on the raw ask alone but flags that prior-art/constraint checking hasn't happened yet.)*
 
 ```
 You are drafting a first-pass PRD for a Product Manager to edit and finalize. Your job is to
-turn a raw idea/ask into a structured, falsifiable requirements document — not to invent product
+turn a raw idea/ask into a structured, falsifiable requirements document, not to invent product
 strategy. Where the ask is ambiguous about scope or priority, surface the ambiguity explicitly
 rather than resolving it yourself.
 
 CONTEXT:
 - Raw idea/ask: [paste the original request, however informal]
-- Any prior related PRDs/tickets in this product area: [links, if known]
+- Vetting Note, if one exists: [paste link/content, or state "none — vetting not yet done"]
 - PRD template: [paste your Confluence template structure]
 
 INSTRUCTIONS:
-1. If you have repo access, do a light pass to check whether something resembling this already
-   exists (similar feature, similar flag, similar endpoint) — note it if so, rather than assuming
-   this is greenfield. This isn't a full impact analysis (that's Stage 1); it's a sanity check on
-   whether the ask is actually new.
+1. If a Vetting Note exists, read it first and reflect its findings directly in the PRD: if it
+   found partial existing functionality, scope the PRD around what's actually new rather than
+   restating something that already exists; if it found a past rejection that no longer applies,
+   note why in the PRD so that context isn't lost; if it found a platform constraint, either write
+   it in as a non-goal/limitation or flag it as an open question if it seems blocking. If no
+   Vetting Note exists, say so explicitly in the output rather than silently treating the ask as
+   pre-vetted.
 2. Write the problem statement in terms of the user/business outcome, not the solution — if the
    raw ask already prescribes a specific technical solution, separate "what problem this solves"
-   from "the asker's proposed solution" so Stage 1/2 aren't anchored to an unvalidated approach.
+   from "the asker's proposed solution" so downstream design work isn't anchored to an
+   unvalidated approach.
 3. Write acceptance criteria as specific, testable statements ("a user can X and sees Y"), not
    vague goals ("improve the experience"). Every acceptance criterion should be falsifiable —
    someone should be able to look at the finished feature and say yes/no, did this happen.
 4. Write explicit non-goals: what this PRD is deliberately NOT solving, especially anything
    adjacent that someone might assume is included. This is what stops scope from silently
-   expanding at Design or Implementation time.
+   expanding during design or implementation.
 5. Propose a success metric that's measurable post-launch, not just "users are happy."
 6. Flag anything in the raw ask that's ambiguous about priority, scope, or audience as an open
    question for the PM — do not silently pick an interpretation.
+7. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT (mirror your Confluence PRD template):
 ## Problem Statement
@@ -62,32 +407,50 @@ OUTPUT FORMAT (mirror your Confluence PRD template):
 [measurable, post-launch]
 
 ## Open Questions for PM
-- [ambiguity in the raw ask that needs a human decision]
+- [ambiguity in the raw ask that needs a human decision, including any blocking item flagged
+  in the Vetting Note, if one exists]
 
-## Possible Prior Art Found
-[similar existing feature/flag/endpoint, if found — or "none found"]
+## Self-Verification
+**Grounded (evidence-backed):**
+- [PRD element] — backed by: [specific line in the raw ask, or specific Vetting Note finding]
+
+**Assumed (no hard evidence, but reasonable):**
+- [PRD element] — assumption: [what's being assumed about scope/priority/audience] — risk if
+  wrong: [what breaks downstream if this assumption is false]
+
+**Could Not Verify / Gaps:**
+- [thing this skill needed but didn't have — e.g. no Vetting Note existed] — who can unblock:
+  [role/team]
+
+**For the Next Skill (system impact analysis):**
+- [which requirements are firm vs. likely to shift — impact analysis should treat firm ones as
+  scope and flag if it finds something the shifting ones didn't anticipate]
 ```
 
 ---
 
-## Stage 1 — System Impact Analysis
+## system-impact-analysis
+
+**Requires:** a PRD (or, for low-risk work, a ticket summary); repo access.
+**Produces:** a System Impact Map — services/modules touched, cross-service dependencies, data touched, new external dependencies, a risk tier recommendation.
 
 ```
-You are reviewing a proposed change for its impact across our codebase BEFORE any design or
+You are reviewing a proposed change for its impact across the codebase BEFORE any design or
 code is written. Your job is to find what this idea will actually touch — not to evaluate
 whether it's a good idea.
 
 CONTEXT:
-- Approved PRD: [paste link/content — REQUIRED for Tier 2/3; for Tier 1 a ticket summary is fine]
+- PRD or ticket summary: [paste link/content — a full PRD is strongly recommended for anything
+  beyond trivial changes]
 - Affected area (if known): [e.g. "checkout-service" or "unsure"]
 
 INSTRUCTIONS:
-1. Read the PRD's requirements and acceptance criteria fully — your job is to map impact against
-   what the PRD actually commits to, including its non-goals (so you don't over-scope the impact
+1. Read the requirements and acceptance criteria fully — your job is to map impact against what's
+   actually being committed to, including any stated non-goals (so you don't over-scope the
    analysis to things explicitly excluded).
-2. Search the codebase for the area(s) implicated by the PRD. Do not assume structure — locate the
-   actual services, modules, or packages involved by reading directory structure, README files,
-   and CLAUDE.md/architecture docs if present.
+2. Search the codebase for the area(s) implicated. Do not assume structure — locate the actual
+   services, modules, or packages involved by reading directory structure, README files, and
+   CLAUDE.md/architecture docs if present.
 3. For each service/module you identify as touched, find:
    - Its declared API contracts (REST/GraphQL schemas, gRPC .proto files, event/message schemas)
    - Any other service in the repo that calls it or is called by it (search for client imports,
@@ -99,13 +462,16 @@ INSTRUCTIONS:
    license, supply-chain, and compliance review needs that are easy to miss until someone's
    already mid-implementation.
 5. Flag anything that crosses a service boundary, even if the requester didn't mention it.
-6. Cross-check your findings against the PRD's acceptance criteria — if a criterion implies a
+6. Cross-check your findings against the stated acceptance criteria — if a criterion implies a
    touchpoint you haven't found evidence for in the code, flag it as an open question rather than
    assuming it doesn't apply.
 7. Do not speculate about code you have not opened — if you reference a file or function,
    you must have actually read it.
 8. Note your confidence level for each finding (High = read the code directly, Medium = inferred
    from naming/structure, Low = guessed).
+9. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer. It summarizes the per-finding confidence above into something the next skill
+   can act on directly.
 
 OUTPUT FORMAT (use exactly this structure):
 ## Services/Modules Touched
@@ -125,13 +491,100 @@ OUTPUT FORMAT (use exactly this structure):
 
 ## Open Questions for Service Owners
 - [anything you couldn't resolve from the code alone — who needs to be looped in]
+
+## Self-Verification
+**Grounded (evidence-backed):**
+- [all High-confidence findings above — list by reference, don't repeat the evidence]
+
+**Assumed (no hard evidence, but reasonable):**
+- [all Medium-confidence findings above] — risk if wrong: [what breaks downstream]
+
+**Could Not Verify / Gaps:**
+- [all Low-confidence findings, plus anything you couldn't find at all] — blocked by: [reason] —
+  who can unblock: [role/team]
+
+**For the Next Skill (design doc generation):**
+- [which parts of this map the design can build on directly vs. which need confirming before
+  the design locks in an approach that depends on them]
 ```
 
 ---
 
-## Stage 2-Draft — Design Doc Generation
+## dependency-heads-up
 
-*(Runs before Stage 2a. Produces a first full draft for the architect to edit, not a final document — the architect remains accountable for the design and must review every section before it goes to review.)*
+**Requires:** a System Impact Map listing one or more dependent teams.
+**Produces:** an early heads-up notice per dependent team — no commitment requested, just acknowledgment and an early conflict flag.
+
+*(Deliberately lightweight. The goal is "no dependent team is blindsided later," not "get a yes today." Send this as soon as a System Impact Map identifies a dependency, before design locks in scope.)*
+
+```
+You are drafting an early heads-up notice to a dependent team, based on a System Impact Map. Your
+job is to give them a genuinely useful early signal — specific enough to act on, light enough
+that it doesn't read as a demand for an answer they can't give yet.
+
+CONTEXT:
+- System Impact Map: [paste link/content — REQUIRED]
+- Dependent team(s) identified: [list, from the Impact Map]
+- Rough target timeframe (program end date, UAT date, or team date, if known): [paste]
+
+INSTRUCTIONS:
+1. For each dependent team in the Impact Map, write a separate notice — don't send one combined
+   notice to multiple teams, since each team needs to scan only what's relevant to them.
+2. State what was found in the Impact Map that implicates this team, in their own domain
+   language where possible (e.g. "this touches the /orders endpoint your team owns," not "this
+   touches a service").
+3. Give a rough shape of what's likely needed (a new field, a new endpoint, increased throughput,
+   a schema change) — but explicitly flag that this is not final, since design hasn't happened
+   yet. Don't let the notice read as a commitment request.
+4. Give a rough timeframe, anchored to whatever target date is known, but phrase it as "likely
+   needed by approximately X" rather than a firm date — the firm date comes later, once concrete
+   stories exist (see the firm-ask skill).
+5. State explicitly what response you need: not a commitment, just acknowledgment that they've
+   seen this and a flag if it obviously conflicts with something already on their roadmap.
+6. State the acknowledgment SLA (e.g. 2 business days) and what happens if there's no response by
+   then (escalation path) — make this visible to the recipient, not just something tracked
+   internally.
+7. Run the Self-Verification step below before finalizing.
+
+OUTPUT FORMAT (one block per dependent team):
+## Notice to: [Team Name]
+**What this touches:** [specific to their domain, with reference to the Impact Map finding]
+**Rough shape of the ask (not final):** [what's likely needed]
+**Rough timeframe:** [approximate, anchored to known target date]
+**What we need from you now:** Acknowledge receipt within [SLA]. Flag now only if this obviously
+conflicts with existing commitments — a full answer isn't needed yet, that comes once design is
+locked.
+**If no response by [SLA deadline]:** Escalates to [requesting tech lead's manager] and
+[dependent team's manager].
+
+## Tracking Note
+[one line per team: notice sent, SLA deadline, escalation contacts — for the requester to track
+against]
+
+## Self-Verification
+**Grounded (evidence-backed):**
+- [each "what this touches" claim] — backed by: [specific Impact Map line]
+
+**Assumed (no hard evidence, but reasonable):**
+- [each "rough shape" or "rough timeframe" claim] — assumption: [what's being assumed] — risk if
+  wrong: [team gets a notice that turns out irrelevant or under-scoped]
+
+**Could Not Verify / Gaps:**
+- [team where contact info, ownership, or domain context was unclear] — who can unblock: [role]
+
+**For the Next Skill (dependency-firm-ask, once stories exist):**
+- [which rough shapes/timeframes are likely to firm up as-is vs. which are likely to change —
+  the firm ask should flag any team where the actual need turned out different from this notice]
+```
+
+---
+
+## design-doc-generation
+
+**Requires:** a System Impact Map; a Design Doc template.
+**Produces:** a Design Doc first draft — problem statement, current state, proposed approach, alternatives, data model changes, NFR targets, a Mermaid diagram when the change is Medium/High complexity or alters an existing flow — tagged by evidence confidence.
+
+*(Produces a first full draft for an architect to edit, not a final document — the architect remains accountable for the design and must review every section before it goes to review.)*
 
 ```
 You are drafting a first-pass Design Doc for an architect to edit and finalize. Your job is to
@@ -140,12 +593,12 @@ real architectural choice is needed and the codebase doesn't make the answer obv
 options with trade-offs rather than silently picking one.
 
 CONTEXT:
-- Idea/ticket: [paste Jira ticket link + summary]
-- Stage 1 System Impact Map: [paste link/content — REQUIRED, do not draft without this]
+- Idea/ticket or PRD: [paste link/content]
+- System Impact Map: [paste link/content — REQUIRED, do not draft without this]
 - Design Doc template: [paste your Confluence template structure]
 
 INSTRUCTIONS:
-1. Read the Stage 1 Impact Map first. Every service/dependency it lists must be addressed
+1. Read the System Impact Map first. Every service/dependency it lists must be addressed
    somewhere in your draft — don't narrow scope without saying so explicitly.
 2. For the "current state" / "how this works today" framing sections: read the actual code for
    every claim you make. Never write "currently X does Y" without having opened the file that
@@ -162,16 +615,29 @@ INSTRUCTIONS:
    endpoints/services you found in the code, or explicitly mark it "NEEDS ARCHITECT INPUT —
    no comparable precedent found in codebase."
 6. For data model changes: describe the current schema as found in code (file:line), and the
-   proposed change — flag this section as requiring the formal schema review regardless of what
-   you draft.
+   proposed change — flag this section as requiring formal schema review regardless of what you
+   draft.
 7. Tag every section/claim as one of: [GROUNDED — file:line evidence], [INFERRED — reasonable but
    not directly verified], or [NEEDS ARCHITECT DECISION — a real judgment call, not something the
    code can answer]. This is what lets the architect skip straight to the parts that actually
    need their judgment instead of re-deriving everything from scratch.
+8. Decide whether this change needs a Mermaid diagram: REQUIRED if the change is Medium/High
+   complexity (touches 2+ services, introduces a new component, or changes an existing flow/
+   sequence) per the System Impact Map. For anything simpler, ASK rather than silently omitting
+   or silently including one — state your reasoning either way so the architect can override
+   quickly instead of you guessing wrong in either direction.
+   - If required (or the architect asks for one after you flag it): produce a Mermaid diagram
+     (flowchart for a changed process flow, sequence diagram for a changed service interaction,
+     or both if the design has both). Base it on the actual current code/contracts found in the
+     System Impact Map, not a generic textbook shape — show the actual services/functions
+     involved, named as they are in the codebase.
+9. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer. It rolls the per-claim GROUNDED/INFERRED/NEEDS-ARCHITECT-DECISION tags above
+   into a summary the next skill can act on.
 
 OUTPUT FORMAT (mirror your Confluence Design Doc template, with these tags inline):
 ## Problem Statement
-[from ticket — flag if ticket scope seems inconsistent with Stage 1 findings]
+[from ticket/PRD — flag if scope seems inconsistent with Impact Map findings]
 
 ## Current State
 [GROUNDED/INFERRED tagged claims, each with file:line]
@@ -184,6 +650,10 @@ OUTPUT FORMAT (mirror your Confluence Design Doc template, with these tags inlin
 - [Alternative 2] — trade-offs — [tag]
 - [Extend existing pattern, if found] — trade-offs — [tag]
 
+## Architecture/Flow Diagram
+[Mermaid diagram if required per the complexity check above, or: "Not generated — change is
+low-complexity, single-service, no flow change. Flag if you'd like one anyway."]
+
 ## Data Model Changes
 [current schema w/ file:line, proposed change, "requires formal schema review" flag]
 
@@ -193,11 +663,30 @@ OUTPUT FORMAT (mirror your Confluence Design Doc template, with these tags inlin
 
 ## Open Decisions for Architect
 [every NEEDS ARCHITECT DECISION item, pulled into one list for fast scanning]
+
+## Self-Verification
+**Grounded (evidence-backed):**
+- [roll-up of every GROUNDED-tagged claim above — list by section, don't repeat the evidence]
+
+**Assumed (no hard evidence, but reasonable):**
+- [roll-up of every INFERRED-tagged claim above] — risk if wrong: [what breaks if this inference
+  is incorrect]
+
+**Could Not Verify / Gaps:**
+- [every NEEDS ARCHITECT DECISION item, plus anything the System Impact Map flagged that this
+  draft couldn't resolve] — who can unblock: [architect/specific role]
+
+**For the Next Skill (design review, NFR review, data model review, test strategy):**
+- [which sections are solid enough to review as-is vs. which are placeholder/INFERRED and should
+  be treated as provisional until the architect weighs in]
 ```
 
 ---
 
-## Stage 2a — Design Review (architecture/approach)
+## design-review
+
+**Requires:** a Design Doc; the System Impact Map it was drafted against.
+**Produces:** a verdict on the design — verified claims, contradicted claims, pattern consistency, impact-map coverage gaps.
 
 ```
 You are reviewing a Design Doc against the actual codebase, acting as a second architect —
@@ -205,7 +694,7 @@ not rubber-stamping, and not nitpicking style.
 
 CONTEXT:
 - Design Doc: [paste link or content]
-- System Impact Map from Stage 1: [paste link or content]
+- System Impact Map it was drafted against: [paste link or content]
 
 INSTRUCTIONS:
 1. Read the Design Doc fully before touching the codebase.
@@ -217,7 +706,9 @@ INSTRUCTIONS:
    pagination, etc. that this design ignores or duplicates?).
 4. Check the alternatives-considered section: are there simpler existing mechanisms in the
    codebase that would solve this, which the doc didn't mention?
-5. Identify anything in the Stage 1 Impact Map that the design doesn't actually address.
+5. Identify anything in the System Impact Map that the design doesn't actually address.
+6. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Verified Claims
@@ -230,15 +721,34 @@ OUTPUT FORMAT:
 - [existing pattern found elsewhere in codebase] — design [follows it / diverges from it: explain]
 
 ## Impact Map Coverage Gaps
-- [item from Stage 1 map not addressed in design]
+- [item from the Impact Map not addressed in design]
 
 ## Verdict
 [Approve / Approve with changes / Needs rework] — [reasoning]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [claim from doc] — confirmed at [file:line]
+
+**Could Not Verify:**
+- [claim from doc you couldn't confirm or deny] — blocked by: [code not found / ambiguous spec /
+  needs the original author's intent] — who can unblock: [architect]
+
+**Confident But Not Proven:**
+- [pattern-consistency or coverage-gap finding made by inference rather than a direct quote/
+  contradiction] — basis: [what the inference rests on] — confidence: [Medium/Low]
+
+**For the Next Skill (NFR review, data model review, test strategy):**
+- [which parts of the design are now confirmed solid vs. which are still provisional pending the
+  architect resolving a Contradicted Claim or Coverage Gap above]
 ```
 
 ---
 
-## Stage 2b — NFR Review
+## nfr-review
+
+**Requires:** a Design Doc's NFR section; the relevant service(s) from a System Impact Map.
+**Produces:** an NFR coverage table against actual codebase baselines, missing NFRs, blocking issues.
 
 ```
 You are reviewing the Non-Functional Requirements section of a Design Doc against what the
@@ -246,7 +756,7 @@ codebase can actually deliver today — not against the doc's own assertions.
 
 CONTEXT:
 - Design Doc NFR section: [paste]
-- Relevant service(s): [from Stage 1 impact map]
+- Relevant service(s): [from the System Impact Map]
 
 INSTRUCTIONS:
 1. For each NFR category below, check the codebase for current actuals, then compare to the
@@ -263,9 +773,11 @@ INSTRUCTIONS:
    - Observability: check whether the design's proposed metrics/logs follow existing
      instrumentation patterns (same libraries, naming conventions, dashboards-as-code).
    - Backward compatibility: if this changes a contract, check actual current consumers
-     (found in Stage 1) for what would break.
+     (found in the Impact Map) for what would break.
 2. Do not accept "should be fine" or "no impact" as a target — every NFR needs a number or an
    explicit, code-grounded justification for why it doesn't apply.
+3. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## NFR Coverage Table
@@ -283,13 +795,32 @@ OUTPUT FORMAT:
 
 ## Blocking Issues
 - [anything that should stop this from moving to implementation as-is]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [category] — baseline confirmed at [file:line/config]
+
+**Could Not Verify:**
+- [category with no discoverable baseline] — blocked by: [no benchmarks/SLOs/dashboards exist for
+  this] — who can unblock: [whoever owns the missing instrumentation]
+
+**Confident But Not Proven:**
+- [a Gap/Risk judgment made without a hard current-state number] — basis: [comparable service/
+  pattern] — confidence: [Medium/Low]
+
+**For the Next Skill (test strategy):**
+- [which NFR targets have a real baseline to verify against vs. which have no baseline at all —
+  the latter need a verification method invented from scratch, not assumed achievable]
 ```
 
 ---
 
-## Stage 2c — Data Model Review
+## data-model-review
 
-*(Feeds into your existing formal schema review — this prompt prepares the evidence for that review, it doesn't replace it.)*
+**Requires:** a proposed schema change; the Design Doc it belongs to.
+**Produces:** evidence for formal schema review — current schema, all consumers found, migration assessment, compliance flags.
+
+*(Feeds into your existing formal schema review — this skill prepares the evidence for that review, it doesn't replace it.)*
 
 ```
 You are preparing a data model change for formal schema review by checking it against actual
@@ -311,6 +842,9 @@ INSTRUCTIONS:
    nullable transition period) — flag if missing.
 5. Check whether this table is referenced in any data retention/compliance-relevant logic
    (look for PII handling, encryption, audit-log table references).
+6. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer. Be especially honest here: missed consumers are the single most common way
+   this kind of review fails silently.
 
 OUTPUT FORMAT:
 ## Current Schema (as found in code)
@@ -327,13 +861,32 @@ OUTPUT FORMAT:
 
 ## Recommendation for Schema Review Board
 [Ready for review / Needs more migration detail / Needs consumer sign-off from: list teams]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [consumer found and assessed] — confirmed at [file:line]
+
+**Could Not Verify:**
+- [any service/repo you couldn't search — e.g. a service in a repo you don't have access to, or
+  a reporting job in an external BI tool] — blocked by: [reason] — who can unblock: [role/team]
+
+**Confident But Not Proven:**
+- [any "broken by this change: unsure" item — call it out explicitly here too] — basis: [why you
+  suspect this either way] — confidence: [Medium/Low]
+
+**For the Next Skill (formal schema review board, test strategy):**
+- [which consumers are fully confirmed safe/unsafe vs. which need a human to manually check a
+  system this skill couldn't search]
 ```
 
 ---
 
-## Stage 2d — Test Strategy
+## test-strategy
 
-*(Runs alongside 2a/2b/2c, after the Design Doc draft exists and before implementation starts. Produces the test plan as its own reviewable artifact — not a checkbox inside the Design Doc — so the shape of testing is a constraint on implementation, not an afterthought discovered at PR time.)*
+**Requires:** a Design Doc (draft or approved); a System Impact Map; NFR targets (from `nfr-review` or the Design Doc itself); existing test setup/CI config.
+**Produces:** a Test Strategy — the test pyramid for this change, NFR-to-verification mapping, explicit out-of-scope notes, standing contract-test gaps.
+
+*(Produces the test plan as its own reviewable artifact — not a checkbox inside the Design Doc — so the shape of testing is a constraint on implementation, not an afterthought discovered at PR time. Run after a Design Doc draft exists and before implementation starts.)*
 
 ```
 You are defining the test strategy for an approved-pending Design Doc, BEFORE any implementation
@@ -342,8 +895,8 @@ at what level of the test pyramid — not to write the tests themselves yet.
 
 CONTEXT:
 - Design Doc (draft or approved): [paste link/content]
-- Stage 1 System Impact Map: [paste link/content]
-- NFR targets from Stage 2b: [paste]
+- System Impact Map: [paste link/content]
+- NFR targets: [paste, from the Design Doc or a separate NFR review]
 - Existing test setup: [point to test directories, CI config, contract test tooling if any]
 
 INSTRUCTIONS:
@@ -361,16 +914,18 @@ INSTRUCTIONS:
      boundary, flag it as a gap to close, not optional
    - End-to-end: only where a multi-service user-facing flow changes — name the specific flow,
      don't default to "add an e2e test" for everything
-   - NFR-specific verification: map each NFR target from Stage 2b to a concrete verification
-     method (load test for performance/scale targets, security scan for the security target,
-     chaos/failure-injection for availability targets) — an NFR with no verification method is
-     a target nobody will actually check
+   - NFR-specific verification: map each NFR target to a concrete verification method (load test
+     for performance/scale targets, security scan for the security target, chaos/failure-
+     injection for availability targets) — an NFR with no verification method is a target nobody
+     will actually check
 3. Be explicit about what's OUT of scope for this change's testing and why (e.g. "not
    re-testing existing checkout flow, unchanged by this work") — this is what keeps the pyramid
    proportional instead of growing unboundedly.
 4. Flag any cross-service boundary from the Impact Map that has NO contract test today,
    regardless of whether this change requires one — this is a standing gap worth surfacing
    even if it's not blocking.
+5. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Test Pyramid for This Change
@@ -382,7 +937,7 @@ OUTPUT FORMAT:
 | E2E | ... | ... | ... |
 
 ## NFR Verification Mapping
-| NFR Target (Stage 2b) | Verification Method | New or Existing |
+| NFR Target | Verification Method | New or Existing |
 |---|---|---|
 
 ## Explicitly Out of Scope
@@ -393,45 +948,82 @@ OUTPUT FORMAT:
 
 ## Recommendation
 [Test plan sufficient to proceed to implementation / Gaps must close first — list which]
+
+## Self-Verification
+**Grounded (evidence-backed):**
+- [pyramid layer/mapping decision] — backed by: [existing test file found at path, or NFR target
+  with a clear verification method]
+
+**Assumed (no hard evidence, but reasonable):**
+- [pyramid layer/mapping decision] — assumption: [e.g. "no existing load test pattern found, so
+  proposing a new one based on similar service X"] — risk if wrong: [test ends up not actually
+  validating the target]
+
+**Could Not Verify / Gaps:**
+- [any service/boundary whose existing test setup you couldn't find or inspect] — blocked by:
+  [reason] — who can unblock: [role/team]
+
+**For the Next Skill (story creation, implementation):**
+- [which layers of the plan are solid enough to implement directly vs. which are a best-guess
+  that the implementing skill should sanity-check once it's actually in the code]
 ```
 
 ---
 
-## Stage 2e — Story Creation
+## story-creation
 
-*(Runs after Stage 2/2a–2d are approved, before Stage 3-Implement. Produces the actual Jira stories the implementing agent will work from — this exists because a vague story breakdown is exactly what causes an implementing AI to fill gaps with assumptions instead of flagging them.)*
+**Requires:** an approved Design Doc; an approved Test Strategy; a PRD.
+**Produces:** vertically-sliced, HITL/AFK-tagged Jira stories, each traceable to a PRD requirement and a Design Doc section.
+
+*(Produces the actual stories an implementer — human or AI — will work from. This exists because a vague, horizontally-sliced story breakdown is exactly what causes an implementing AI to fill gaps with assumptions instead of flagging them.)*
 
 ```
 You are breaking an approved Design Doc and Test Strategy into implementable Jira stories. Your
-job is to produce stories specific enough that someone (human or AI) could implement each one
-without needing to re-derive scope from the design doc — not to summarize the design into vague
-restatements.
+job is to produce vertical-slice stories specific enough that someone (human or AI) could
+implement each one without needing to re-derive scope from the design doc — not to summarize the
+design into vague restatements, and not to slice it horizontally by layer.
 
 CONTEXT:
 - Approved PRD: [paste link/content]
 - Approved Design Doc: [paste link/content]
-- Approved Test Strategy (Stage 2d): [paste link/content]
+- Approved Test Strategy: [paste link/content]
 - Jira project/template conventions: [paste, if you have a standard story format]
 
 INSTRUCTIONS:
 1. Read the Design Doc and Test Strategy fully. Every distinct piece of the proposed approach
    should map to at least one story — do not collapse the whole design into a single story, and
    do not split it so finely that individual stories are meaningless on their own.
-2. For each story, write acceptance criteria that trace back to a specific PRD requirement and a
+2. Slice VERTICALLY, not horizontally: each story should cut through every layer it touches
+   end-to-end (e.g. API + service logic + data access for one capability), not isolate a single
+   layer across the whole feature (e.g. "build all the API endpoints" as one story and "build all
+   the DB queries" as another). A horizontal slice can look done while nothing actually works
+   end-to-end yet — that's the failure mode this rule exists to prevent.
+3. For each story, write acceptance criteria that trace back to a specific PRD requirement and a
    specific part of the Design Doc — cite which requirement/section, don't just paraphrase the
    design generically.
-3. For each story, note which Test Strategy layer(s) (unit/integration/contract/e2e/NFR
+4. For each story, note which Test Strategy layer(s) (unit/integration/contract/e2e/NFR
    verification) it's responsible for, so test creation isn't an afterthought bolted on at the
    end of implementation.
-4. Sequence the stories in a sensible implementation order (e.g. data model changes before the
+5. Tag each story HITL or AFK:
+   - **HITL** (Human-In-The-Loop): the story requires a human decision mid-implementation — an
+     architectural judgment call, an ambiguous UX/product decision, or anything earlier review
+     flagged as an open question that this story would need resolved before an implementer could
+     proceed without guessing.
+   - **AFK** (Away-From-Keyboard): the story is fully specified by its acceptance criteria and the
+     Design Doc — an implementer (human or AI) can complete it without a mid-stream decision.
+   Default to HITL when genuinely uncertain — a story wrongly tagged AFK is the one that produces
+   a silent bad guess; a story wrongly tagged HITL just costs someone a quick confirmation.
+6. Sequence the stories in a sensible implementation order (e.g. data model changes before the
    code that depends on them, shared utilities before their consumers) and flag any dependencies
    between stories explicitly.
-5. After drafting all stories, do a coverage check: list every requirement in the PRD and every
+7. After drafting all stories, do a coverage check: list every requirement in the PRD and every
    proposed-approach element in the Design Doc, and confirm each one is covered by at least one
    story. Flag anything from the design that isn't covered by any story (a drop) and anything in
    a story that isn't traceable to the design (an addition) — neither should happen silently.
-6. Do not write stories so broad that "acceptance criteria" amounts to "implement the feature" —
+8. Do not write stories so broad that "acceptance criteria" amounts to "implement the feature" —
    if a story can't be falsified by a reviewer, it's not specific enough yet.
+9. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Stories
@@ -439,6 +1031,8 @@ OUTPUT FORMAT:
 - **Traces to:** PRD requirement [X], Design Doc section [Y]
 - **Acceptance criteria:** [specific, testable]
 - **Test Strategy layers owned:** [unit/integration/contract/e2e/NFR — which ones]
+- **Slice check:** [confirm this cuts end-to-end through its layers, not isolated to one layer]
+- **Tag:** [HITL — reason it needs a human decision / AFK — confirmed fully specified]
 - **Depends on:** [other story, if any]
 
 [repeat per story]
@@ -449,15 +1043,120 @@ OUTPUT FORMAT:
 - Dropped (in design, not in any story): [list, or "none found"]
 - Added (in a story, not traceable to design): [list, or "none found"]
 
+## HITL Stories Requiring Decisions Before Implementation
+- [story] — decision needed: [specific question for the human]
+
 ## Suggested Implementation Order
-[sequenced list with dependency notes]
+[sequenced list with dependency notes, noting where HITL stories block AFK stories downstream]
+
+## Self-Verification
+**Grounded (evidence-backed):**
+- [stories with a clean, direct trace to a specific PRD requirement + Design Doc section]
+
+**Assumed (no hard evidence, but reasonable):**
+- [any story where the trace to PRD/Design Doc required some interpretation] — assumption: [what
+  was inferred] — risk if wrong: [story scope ends up wrong]
+
+**Could Not Verify / Gaps:**
+- [any Coverage Check "Dropped" or "Added" item above — repeat it here so it's not buried in a
+  different section] — who can unblock: [architect/PM]
+
+**For the Next Skill (implementation):**
+- [which stories are fully AFK-safe vs. which AFK tags are a closer call the implementing skill
+  should be more willing to second-guess if something feels underspecified once it's in the code]
 ```
 
 ---
 
-## Stage 3 — Implementation (writing the code)
+## dependency-firm-ask
 
-*(Produces the actual diff for one Stage 2e story at a time. Run the PR-time review below as a SEPARATE agent session afterward — never let the implementing agent review its own work; it shares the same blind spots that produced the code in the first place.)*
+**Requires:** concrete stories (from `story-creation`) that depend on another team; an earlier heads-up notice if one was sent (recommended, not required); a target date.
+**Produces:** a firm, answerable request per dependent team, with a forced Committed/Conditional/Conflict response and resulting story-tag implications.
+
+*(Converts an earlier heads-up into a specific request now that stories exist. The dependent team's lead should be able to respond Committed/Conditional/Conflict without needing a meeting just to understand the ask.)*
+
+```
+You are converting an earlier dependency heads-up (or, if none was sent, a fresh ask) into a
+specific, answerable request, now that stories exist. Your job is to make the ask concrete enough
+that the dependent team's lead can give a real answer — not another round of "we'll need
+something from you eventually."
+
+CONTEXT:
+- Earlier heads-up notice sent to this team, if any: [paste, or "none sent yet"]
+- Stories that depend on this team: [paste the specific stories — REQUIRED]
+- Target date this dependency needs to land by: [paste — anchor to the program/UAT/team date that
+  applies to this feature]
+- Dependent team's known sprint/PI cadence, if known: [paste, or "unknown — ask"]
+
+INSTRUCTIONS:
+1. For each story that depends on this team, state exactly what's needed — an API contract
+   change, a schema change, a feature flag, a capacity allocation, a review/approval — not a
+   vague restatement of the story. Cite the specific story.
+2. State the target date this is needed by, and work backward to state the latest date the
+   dependent team would need to START in order to hit it, if you can estimate their typical lead
+   time (ask explicitly if you can't estimate it — don't guess at another team's velocity).
+3. State explicitly what happens to the requesting team's timeline if this slips — a specific
+   downstream impact (e.g. "X feature misses the program date"), not a generic "this would delay
+   things." This is what lets the dependent team's lead actually weigh the request against their
+   other priorities.
+4. Frame the response as a forced choice, not an open question:
+   - **Committed** — confirm the date and what capacity is allocated
+   - **Conditional** — possible, but only if [specific thing] happens first — name it
+   - **Conflict** — not possible without something else on their plate slipping — name what
+   Do not let the ask be answerable with a vague "we'll try."
+5. If a response isn't given by an agreed deadline, state the escalation path explicitly in the
+   ask itself — don't leave escalation as an unstated assumption.
+6. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
+
+OUTPUT FORMAT:
+## Firm Ask to: [Team Name]
+**Stories depending on you:** [list, with specific story references]
+**Exactly what's needed:** [specific artifact/capacity/decision, per story]
+**Needed by:** [date] — **your estimated start-by date:** [date, or "please confirm your lead
+time, we couldn't estimate it"]
+**Impact if this slips:** [specific downstream consequence]
+**Please respond with one of:**
+- Committed — [date], [capacity allocated]
+- Conditional — possible if [X] happens first
+- Conflict — not possible without [Y] slipping
+
+**If no response by [deadline]:** Escalates to [requesting tech lead's manager] and [dependent
+team's manager].
+
+## Self-Verification
+**Grounded (evidence-backed):**
+- [each "exactly what's needed" item] — backed by: [the specific story it traces to]
+
+**Assumed (no hard evidence, but reasonable):**
+- [the estimated start-by date, if you had to infer the dependent team's lead time] —
+  assumption: [basis for the estimate] — risk if wrong: [ask undersells/oversells urgency]
+
+**Could Not Verify / Gaps:**
+- [anything you couldn't pin down — e.g. dependent team's actual cadence] — who can unblock:
+  [the dependent team's lead, directly]
+
+**For the Next Skill (once a response is received, feeding into Outcome Tracking below):**
+- [what should make you re-check the request once a response comes back — e.g. if Conditional,
+  confirm the named precondition is actually realistic before treating it as a soft commit]
+
+## Outcome Tracking (fill in once response received)
+- Response: [Committed/Conditional/Conflict]
+- If Conditional: [the named precondition, and who owns resolving it]
+- If Conflict: [escalation status]
+- Resulting story tag: [if Committed, story keeps its original HITL/AFK tag; if Conditional or
+  Conflict, the story is force-tagged HITL regardless of its original tag, since "wait on another
+  team" is exactly the kind of mid-stream decision AFK excludes]
+```
+
+---
+
+## implementation
+
+**Requires:** one story (with acceptance criteria and HITL/AFK tag, from `story-creation`); the Design Doc it belongs to; the Test Strategy; the System Impact Map; repo access.
+**Produces:** a diff implementing the story, with tests, NFR evidence, and any clarifications flagged rather than guessed.
+
+*(Produces the actual diff for one story at a time. Run a review skill as a SEPARATE agent session afterward — never let the implementing agent review its own work; it shares the same blind spots that produced the code in the first place.)*
 
 ```
 You are implementing one approved Jira story as production code in this repository. The story is
@@ -466,43 +1165,55 @@ something to re-scope from. Your job is to follow the story's acceptance criteri
 flag and stop for anything ambiguous rather than guessing.
 
 CONTEXT:
-- Story to implement (with acceptance criteria, from Stage 2e): [paste — REQUIRED]
+- Story to implement (with acceptance criteria and HITL/AFK tag): [paste — REQUIRED]
 - Approved Design Doc: [paste link/content — REQUIRED, for the "why" behind this story]
 - ADR(s): [paste, if any]
-- Stage 1 Impact Map: [paste link/content]
-- Stage 2d Test Strategy: [paste link/content — REQUIRED]
+- System Impact Map: [paste link/content]
+- Test Strategy: [paste link/content — REQUIRED]
 - Relevant repo(s): [paths — include ALL repos if this spans services]
 
 INSTRUCTIONS:
-1. Read the story's acceptance criteria first — that's the specific contract for this unit of
+1. Check the story's HITL/AFK tag first. If it's tagged HITL, confirm the flagged decision was
+   actually resolved by a human before you proceed — if you can't find that resolution, STOP and
+   flag it rather than proceeding on an unresolved HITL story. If it's AFK, proceed, but if you
+   find a genuine decision point the tag didn't anticipate, flag it the same way story creation
+   would have (don't silently treat it as AFK just because it was tagged that way).
+2. Read the story's acceptance criteria first — that's the specific contract for this unit of
    work. Read the Design Doc and ADR for context on why, but implement to the story's stated
    criteria, not a broader interpretation of the design. If the story's scope seems to leave out
    something the design implies it needs, flag it rather than silently expanding the story.
-2. If anything in the story or design is underspecified for implementation (e.g. it says
+3. If anything in the story or design is underspecified for implementation (e.g. it says
    "validate input" without specifying rules, or names a field that doesn't exist in the current
    schema), STOP and ask rather than inventing a decision — log it under "Clarifications Needed"
    instead of silently choosing.
-3. Before changing any function/module, find and read its current callers across the codebase
-   (not just the file you're editing) — this is the same check Stage 1 did at the idea level;
-   redo it now at the code level, since the design may have evolved since Stage 1.
-4. Follow existing patterns in the codebase for error handling, logging, and testing — match the
+4. Before changing any function/module, find and read its current callers across the codebase
+   (not just the file you're editing) — this is the same check the Impact Map did at the idea
+   level; redo it now at the code level, since the design may have evolved since then.
+5. Follow existing patterns in the codebase for error handling, logging, and testing — match the
    conventions already present in neighboring files, don't introduce a new style.
-5. Implement every NFR item relevant to this story as concrete code, not a comment promising it
+6. Implement every NFR item relevant to this story as concrete code, not a comment promising it
    later: add the actual metric/log call, the actual input validation, the actual migration
    script — whatever the NFR section committed to.
-6. Implement the test pyramid layer(s) this story is responsible for, exactly as scoped in the
-   Stage 2d Test Strategy and called out on the story itself. Do not invent additional test scope
-   beyond the plan, and do not skip a layer the story/plan called for. If you find the plan is
-   wrong or insufficient once you're in the actual code (e.g. a contract test the plan didn't
-   anticipate is clearly needed), flag it under "Clarifications Needed" rather than silently
-   deciding for yourself.
-7. Do not silently expand scope beyond this story. If you notice an adjacent improvement worth
+7. Implement the test pyramid layer(s) this story is responsible for, exactly as scoped in the
+   Test Strategy and called out on the story itself. Do not invent additional test scope beyond
+   the plan, and do not skip a layer the story/plan called for. If you find the plan is wrong or
+   insufficient once you're in the actual code (e.g. a contract test the plan didn't anticipate is
+   clearly needed), flag it under "Clarifications Needed" rather than silently deciding for
+   yourself.
+8. Do not silently expand scope beyond this story. If you notice an adjacent improvement worth
    making, note it separately rather than including it in this diff.
-8. Use temporary scratch files/scripts if useful for working through the implementation, but
+9. Use temporary scratch files/scripts if useful for working through the implementation, but
    leave the final repository clean — remove scratch files before finishing, unless you flag a
    reason to keep one (e.g. a migration verification script the team should keep).
+10. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+    optional footer. It rolls the Acceptance Criteria Self-Check, Clarifications Needed, and Test
+    Plan Deviations above into a summary the review skill can act on directly.
 
 OUTPUT FORMAT:
+## HITL/AFK Status Check
+[Confirmed AFK and proceeded / Confirmed HITL decision was already resolved, proceeded / Found
+unresolved HITL blocker, stopped — describe]
+
 ## Implementation Summary
 [what was built, file by file, in plain language]
 
@@ -511,7 +1222,7 @@ OUTPUT FORMAT:
 
 ## Clarifications Needed
 [anything underspecified in the story/design that you stopped on instead of guessing — should
-block merge until the architect/PM answers, not be silently resolved]
+block merge until a human answers, not be silently resolved]
 
 ## NFR Implementation Evidence
 - [NFR item relevant to this story] — [file:line of actual code implementing it]
@@ -520,18 +1231,38 @@ block merge until the architect/PM answers, not be silently resolved]
 [file paths, what each test verifies, which layer it satisfies]
 
 ## Test Plan Deviations
-[anything where you found the Stage 2d plan needed adjustment, flagged rather than silently changed]
+[anything where you found the Test Strategy needed adjustment, flagged rather than silently changed]
 
 ## Scope Check
 [Confirmed: matches story scope / Flagged: see adjacent-improvement notes above]
 
-## Ready for Independent PR Review
+## Self-Verification
+**Grounded (evidence-backed):**
+- [every acceptance criterion verified at a real file:line — roll up from the self-check above]
+
+**Assumed (no hard evidence, but reasonable):**
+- [any implementation choice made by following a pattern rather than an explicit spec] —
+  assumption: [what pattern was followed and why] — risk if wrong: [what a reviewer should
+  double-check]
+
+**Could Not Verify / Gaps:**
+- [every Clarifications Needed item — repeated here so it's not buried] — who can unblock:
+  [architect/PM]
+
+**For the Next Skill (implementation review, security review, infra review):**
+- [which parts of this diff are safe to fast-review vs. which deserve closer scrutiny given an
+  Assumed item or unresolved Clarification above]
+
+## Ready for Independent Review
 [Yes / No — if no, why]
 ```
 
 ---
 
-## Stage 3 — Implementation Review (PR-time)
+## implementation-review
+
+**Requires:** a PR diff; the Design Doc and ADR(s) it implements.
+**Produces:** a design-conformance and correctness verdict — verified, deviated, missed call sites, blocking/non-blocking findings.
 
 ```
 You are reviewing a pull request against its linked Design Doc and ADR — checking whether the
@@ -555,6 +1286,8 @@ INSTRUCTIONS:
 5. Standard correctness review: logic errors, unhandled edge cases, error handling, test
    coverage for the new behavior — but ground every finding in the actual diff and surrounding
    code, not generic advice.
+6. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Design Conformance
@@ -573,13 +1306,32 @@ OUTPUT FORMAT:
 
 ## Verdict
 [Ready to merge / Changes requested] — [summary]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [conformance/correctness finding] — confirmed at [file:line]
+
+**Could Not Verify:**
+- [a call site or usage you couldn't fully trace — e.g. dynamic dispatch, reflection, a consumer
+  in a repo you don't have access to] — blocked by: [reason] — who can unblock: [role/team]
+
+**Confident But Not Proven:**
+- [a correctness concern raised without a concrete failing scenario] — basis: [pattern/heuristic]
+  — confidence: [Medium/Low]
+
+**For the Next Skill (security review, infra review, verification review):**
+- [anything this review didn't have time/access to fully chase down that those reviews should be
+  aware of]
 ```
 
 ---
 
-## Stage 3-Security — Security Review (code-level)
+## security-review
 
-*(Separate from Stage 2's design-level security input and from the Stage 3 correctness review above — a design can be approved as secure and the implementation can still introduce a vulnerability the design never specified at that level of detail. Required for Tier 3; recommended for Tier 2 touching auth/data access.)*
+**Requires:** a PR diff; the Design Doc's security/data-classification section; the risk tier.
+**Produces:** a code-level security verdict — auth/authz verification, injection risk, secrets handling, sensitive data handling, dependency risk.
+
+*(Distinct from a design-level security review — a design can be approved as secure and the implementation can still introduce a vulnerability the design never specified at that level of detail. Recommended for any change touching auth or sensitive data; treat as required for your highest risk tier.)*
 
 ```
 You are doing a security-focused review of this diff against the actual codebase — looking for
@@ -588,8 +1340,8 @@ idea.
 
 CONTEXT:
 - PR diff: [paste or point to branch]
-- Design Doc security/data-classification section: [paste from Stage 2]
-- Risk tier: [Tier 2/3]
+- Design Doc security/data-classification section: [paste]
+- Risk tier: [paste]
 
 INSTRUCTIONS:
 1. For every new or modified endpoint/handler in the diff, check: is authentication/authorization
@@ -605,10 +1357,14 @@ INSTRUCTIONS:
 4. For any new or modified data access touching PII/PHI/financial data (per the Design Doc's
    classification), confirm encryption-at-rest/in-transit matches what similar existing sensitive
    data flows do elsewhere in the codebase — find that existing flow and compare directly.
-5. Check dependency changes in this diff (see Stage 1.5 if this PR adds/upgrades a package) for
-   any known-vulnerable version, by checking the actual version pinned in the lockfile.
+5. Check dependency changes in this diff (new or upgraded packages) for any known-vulnerable
+   version, by checking the actual version pinned in the lockfile.
 6. Do not flag generic "best practice" suggestions with no concrete exploit path — every finding
    needs a specific scenario describing how it could actually be exploited.
+7. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer. Be unusually strict here: a security "Verified" claim with no real proof is
+   worse than flagging it as unverified, since the former gets trusted and the latter gets a
+   second look.
 
 OUTPUT FORMAT:
 ## Auth/Authz Verification
@@ -632,13 +1388,34 @@ OUTPUT FORMAT:
 
 ## Verdict
 [Clear / Must fix before merge] — [list blocking items]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [auth/injection/secrets/data finding] — confirmed at [file:line], exploit path demonstrated
+
+**Could Not Verify:**
+- [anything you couldn't fully trace — e.g. a known-vulnerable dependency check where you lack a
+  live CVE feed, or runtime behavior that static reading alone can't confirm] — blocked by:
+  [reason] — who can unblock: [security team / specific tool]
+
+**Confident But Not Proven:**
+- [a risk rating given without a concrete demonstrated exploit] — basis: [why you rate it this
+  way] — confidence: [Medium/Low] — flag explicitly that this should not be treated as equivalent
+  to a Verified finding
+
+**For the Next Skill (verification review, release readiness review):**
+- [anything Could-Not-Verify or Confident-But-Not-Proven above that should block release until a
+  human security reviewer closes the gap, vs. anything safe to proceed on]
 ```
 
 ---
 
-## Stage 3-Infra — Infrastructure/IaC Review
+## infra-review
 
-*(Run whenever the diff includes infrastructure-as-code changes — Terraform, Kubernetes manifests, IAM policies, network rules, queue/topic provisioning. These carry a different risk profile than application code and are easy to under-review if treated as "just more diff.")*
+**Requires:** an infrastructure-as-code diff; the Design Doc, if infra was anticipated there; a System Impact Map.
+**Produces:** an infra change verdict — current vs proposed state, permission changes, cost/scaling impact, shared-infrastructure risk, rollback independence.
+
+*(Run whenever a diff includes infrastructure-as-code changes — Terraform, Kubernetes manifests, IAM policies, network rules, queue/topic provisioning. These carry a different risk profile than application code and are easy to under-review if treated as "just more diff.")*
 
 ```
 You are reviewing infrastructure-as-code changes against the actual current infrastructure state
@@ -647,7 +1424,7 @@ and the rest of the platform, not just checking that the syntax is valid.
 CONTEXT:
 - IaC diff: [paste or point to branch — Terraform/k8s manifests/IAM policies/etc.]
 - Design Doc: [link, if infra was anticipated there]
-- Stage 1 Impact Map: [link/content]
+- System Impact Map: [link/content]
 
 INSTRUCTIONS:
 1. Read the actual current state of whatever this diff modifies (existing Terraform state/
@@ -660,11 +1437,13 @@ INSTRUCTIONS:
    to similar existing resources in the repo (instance sizes, autoscaling config, retention
    settings).
 4. Check whether this change could affect other services sharing the same infrastructure
-   (a shared VPC, a shared cluster, a shared queue) — cross-reference against the Stage 1 Impact
+   (a shared VPC, a shared cluster, a shared queue) — cross-reference against the System Impact
    Map's listed dependencies.
 5. Confirm there's a way to revert this specific infra change independently of the application
    code deploy (e.g. can the Terraform apply be rolled back without also reverting the app
    version, or are they coupled in a way that complicates rollback).
+6. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Current vs Proposed State
@@ -684,19 +1463,39 @@ OUTPUT FORMAT:
 
 ## Verdict
 [Clear / Must fix before merge] — [list blocking items]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [current-state/permission/cost finding] — confirmed at [file:line in IaC/state]
+
+**Could Not Verify:**
+- [anything you couldn't confirm against live infra — e.g. you read the IaC source but couldn't
+  confirm what's actually deployed right now] — blocked by: [no access to live state/console] —
+  who can unblock: [platform/SRE team]
+
+**Confident But Not Proven:**
+- [a cost/scaling estimate or shared-infra risk made by comparison rather than direct
+  measurement] — basis: [comparable resource] — confidence: [Medium/Low]
+
+**For the Next Skill (release readiness review):**
+- [anything here that should block release vs. anything safe to proceed on with a flagged
+  follow-up]
 ```
 
 ---
 
-## Stage 4 — Verification & NFR Validation Review
+## verification-review
+
+**Requires:** Design Doc NFR targets; a Test Strategy; test evidence attached to the ticket; the relevant test code.
+**Produces:** a verdict on whether test evidence actually proves the NFR targets were met.
 
 ```
 You are checking whether the test evidence attached to this ticket actually proves the NFR
 targets were met — not just that tests exist and passed.
 
 CONTEXT:
-- Design Doc NFR targets: [paste from Stage 2b]
-- Stage 2d Test Strategy: [paste link/content]
+- Design Doc NFR targets: [paste]
+- Test Strategy: [paste link/content]
 - Test evidence attached: [paste test results, load test output, scan reports]
 - Relevant test code: [point to test files in repo]
 
@@ -704,19 +1503,21 @@ INSTRUCTIONS:
 1. Read the actual test code (not just the results summary) for each NFR target — confirm the
    test genuinely exercises the scenario claimed (e.g. a "load test" that only sends 10 requests
    doesn't validate a 10,000 req/s target).
-2. Compare each test's measured result against the target from Stage 2b. Flag any target with
-   no corresponding test at all.
-3. Check the implementation's tests against the Stage 2d Test Strategy layer by layer — confirm
-   every layer the plan called for (unit/integration/contract/e2e) actually has corresponding
-   tests in the diff, not just the easiest layer to write.
+2. Compare each test's measured result against the stated target. Flag any target with no
+   corresponding test at all.
+3. Check the implementation's tests against the Test Strategy layer by layer — confirm every
+   layer the plan called for (unit/integration/contract/e2e) actually has corresponding tests in
+   the diff, not just the easiest layer to write.
 4. For security: check whether the scan tool/config used actually covers the area changed (e.g.
    a SAST scan on the whole repo doesn't substitute for a targeted check on a new auth path).
 5. For schema changes: confirm migration was actually tested against a realistic data volume/
    shape, not just an empty test database.
+6. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Test Pyramid Coverage Check
-| Layer (per Stage 2d plan) | Tests Found in Diff? | Sufficient? |
+| Layer (per Test Strategy) | Tests Found in Diff? | Sufficient? |
 |---|---|---|
 
 ## NFR Target vs Evidence
@@ -728,30 +1529,55 @@ OUTPUT FORMAT:
 
 ## Recommendation
 [Sufficient evidence to proceed / Gaps must be closed before release] — [list blocking gaps]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [NFR target with a real, traced test] — confirmed by reading [test file:line]
+
+**Could Not Verify:**
+- [evidence you couldn't fully assess — e.g. a load test report with no accessible raw data, or
+  a scan tool you don't have config visibility into] — blocked by: [reason] — who can unblock:
+  [QA/security team]
+
+**Confident But Not Proven:**
+- [a "Sufficient"/"Gap" judgment made from the evidence summary rather than the raw test run] —
+  basis: [why you lean this way] — confidence: [Medium/Low]
+
+**For the Next Skill (release readiness review):**
+- [which targets are genuinely proven vs. which are still a judgment call that release readiness
+  should treat as a real risk, not a closed item]
 ```
 
 ---
 
-## Stage 5 — Release Readiness Review
+## release-readiness-review
+
+**Requires:** the full ticket chain (idea/PRD → Design Doc → ADR → PR(s) → test evidence); the risk tier.
+**Produces:** an audit-ready release record — traceability check, rollback plan assessment, sign-off status, cross-team dependency risk, release recommendation.
 
 ```
 You are compiling the audit-ready release record for this change before it ships in the next
 release train.
 
 CONTEXT:
-- Ticket chain: [Idea ticket -> Design Doc -> ADR -> PR(s) -> test evidence, all links]
-- Risk tier: [from Stage 1]
+- Ticket chain: [Idea/PRD -> Design Doc -> ADR -> PR(s) -> test evidence, all links]
+- Risk tier: [paste]
 
 INSTRUCTIONS:
 1. Verify every link in the chain actually resolves and is internally consistent (e.g. the PR
    really implements the linked design, the test evidence really matches the linked NFRs —
-   cross-check against your own findings from Stages 2-4 if you produced them).
+   cross-check against findings from earlier reviews if available).
 2. Confirm a rollback plan exists and is specific (not "we'll roll back if needed" — check for
    an actual mechanism: feature flag, previous version tag, migration down-script).
-3. For Tier 3: confirm security/compliance sign-off is recorded, not just requested.
+3. For your highest risk tier: confirm security/compliance sign-off is recorded, not just
+   requested.
 4. Identify anything in this change that depends on another team's unreleased work or an
    unreleased migration, by checking actual code dependencies (imports, API calls to
-   not-yet-deployed endpoints).
+   not-yet-deployed endpoints), and cross-check against any dependency-firm-ask outcomes if
+   available.
+5. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer. This is the record an auditor reads, so be explicit about what you
+   independently re-confirmed versus what you're trusting from an earlier skill's output.
 
 OUTPUT FORMAT:
 ## Traceability Chain Check
@@ -760,7 +1586,7 @@ OUTPUT FORMAT:
 ## Rollback Plan
 [Specific mechanism found: describe / Missing or vague — flag]
 
-## Sign-offs (Tier 2/3)
+## Sign-offs
 - [required approver] — [recorded: yes/no, link]
 
 ## Cross-Team Dependency Risks
@@ -768,11 +1594,32 @@ OUTPUT FORMAT:
 
 ## Release Recommendation
 [Clear to release / Hold — reasons]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [chain link or sign-off] — independently confirmed at [link/file:line], not just trusted because
+  an earlier skill said so
+
+**Could Not Verify:**
+- [any chain link, sign-off, or dependency status you couldn't independently confirm] — blocked
+  by: [no access to the sign-off record / can't check another team's deploy status] — who can
+  unblock: [role/team]
+
+**Confident But Not Proven:**
+- [anything carried forward from an earlier skill's "Assumed" or "Confident But Not Proven" item
+  without independently re-checking it] — basis: [trusting the upstream skill's finding] —
+  confidence: [Medium/Low]
+
+**For the Next Skill (post-release validation):**
+- [anything not fully closed here that post-release monitoring should specifically watch for]
 ```
 
 ---
 
-## Stage 6 — Post-Release Validation Review
+## post-release-validation
+
+**Requires:** what was deployed (PR/release link); predicted NFR targets; access to logs/metrics/dashboards.
+**Produces:** actuals-vs-predicted comparison, anomalies traced to specific code, a recommendation.
 
 ```
 You are checking, shortly after deployment, whether this change is behaving as predicted —
@@ -780,16 +1627,18 @@ using actual observability data and code, not assumptions.
 
 CONTEXT:
 - What was deployed: [PR/release link]
-- Predicted NFR targets: [from Stage 2b]
+- Predicted NFR targets: [paste]
 - Access to: [logs/metrics/dashboards, however available to you]
 
 INSTRUCTIONS:
-1. Compare actual post-deploy metrics (latency, error rate, throughput) against the Stage 2b
+1. Compare actual post-deploy metrics (latency, error rate, throughput) against the predicted
    targets, where data is available to you.
 2. Check error logs/alerts for anything related to the changed code paths (search by service/
    endpoint name, not generic log scanning).
-3. If anomalies are found, trace them back to the specific code change using the diff from
-   Stage 3, rather than describing them generically.
+3. If anomalies are found, trace them back to the specific code change using the actual diff,
+   rather than describing them generically.
+4. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Actuals vs Predicted
@@ -801,28 +1650,50 @@ OUTPUT FORMAT:
 
 ## Recommendation
 [Healthy, no action / Monitor / Recommend rollback — reasoning]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [actual metric] — read directly from [dashboard/log source]
+
+**Could Not Verify:**
+- [any predicted target with no corresponding live metric/dashboard] — blocked by: [no
+  instrumentation exists for this target] — who can unblock: [whoever owns observability for
+  this service]
+
+**Confident But Not Proven:**
+- [an anomaly attributed to this change without a fully traced causal link] — basis: [timing
+  correlation / similar past incident] — confidence: [Medium/Low]
+
+**For the Next Skill (retrospective review):**
+- [which targets had real data to check against vs. which were unmeasurable — the retro should
+  treat the latter as a process gap worth fixing, not as "nothing went wrong"]
 ```
 
 ---
 
-## Stage 7 — Retrospective Review
+## retrospective-review
+
+**Requires:** a System Impact Map; the actual PR diff(s) that shipped; any incident/anomaly reports.
+**Produces:** a predicted-vs-actual comparison and a concrete process-improvement signal.
 
 ```
-You are doing a closed-loop retrospective on this change: did our impact analysis at Stage 1
+You are doing a closed-loop retrospective on this change: did the original impact analysis
 actually match what happened in the codebase and in production?
 
 CONTEXT:
-- Stage 1 Impact Map: [link/content]
+- System Impact Map: [link/content]
 - Actual PR diff(s) that shipped: [link]
-- Any incident/anomaly reports from Stage 6: [link, if any]
+- Any incident/anomaly reports: [link, if any]
 
 INSTRUCTIONS:
-1. Compare the services/modules predicted as "touched" in Stage 1 against what the actual
+1. Compare the services/modules predicted as "touched" in the Impact Map against what the actual
    merged diff(s) touched (search the real diff, don't just trust the PR description).
 2. Identify anything touched in reality that was NOT predicted — this is the specific signal
-   that should improve the Impact Analysis template or the auto-escalation tiering rules.
-3. If there was a production anomaly (Stage 6), check whether it traces to something missed at
-   Stage 1 or Stage 2 review, and name which stage's review should have caught it.
+   that should improve the Impact Map template or the auto-escalation tiering rules.
+3. If there was a production anomaly, check whether it traces to something missed during impact
+   analysis or design review, and name which review should have caught it.
+4. Run the Self-Verification step below before finalizing — it's part of the deliverable, not an
+   optional footer.
 
 OUTPUT FORMAT:
 ## Predicted vs Actual Impact
@@ -830,11 +1701,29 @@ OUTPUT FORMAT:
 - Missed (touched in reality, not predicted): [list, with file:line evidence]
 
 ## Process Improvement Signal
-[Specific, concrete suggestion for the Impact Map template, tiering rule, or review prompt above
-that would have caught the miss — not a generic "be more thorough"]
+[Specific, concrete suggestion for the Impact Map template, tiering rule, or a specific skill
+above that would have caught the miss — not a generic "be more thorough"]
 
 ## Closure
 [Retro complete — link this output back into the System Impact Map template repository]
+
+## Self-Verification
+**Verified (direct evidence):**
+- [predicted-vs-actual comparison] — confirmed by diffing [the actual merged PR(s)]
+
+**Could Not Verify:**
+- [anything you couldn't fully trace — e.g. an incident report with no clear root-cause link to
+  this change] — blocked by: [reason] — who can unblock: [incident owner]
+
+**Confident But Not Proven:**
+- [a process-improvement suggestion based on this single instance, not a confirmed pattern] —
+  basis: [this one miss] — confidence: [Medium/Low — note explicitly if this needs more than one
+  occurrence before it's worth changing the template/tiering rule]
+
+**For the Next Skill (system-impact-analysis, on the next feature):**
+- [the specific, concrete change to make to that skill's instructions or the Impact Map template
+  — this is the actual feedback loop; without a specific change named here, this retro doesn't
+  close the loop, it just documents the miss]
 ```
 
 ---
@@ -842,8 +1731,161 @@ that would have caught the miss — not a generic "be more thorough"]
 ### Notes on using these with Claude Code
 
 - These assume the agent is pointed at a checked-out copy of the repo (or repos, for cross-service checks) — give it the actual paths, don't paste code snippets when the agent can read the files itself.
-- For Stage 1 and Stage 2c specifically, if your services live in separate repos, the agent needs access to all of them to find cross-repo dependencies — a single-repo view will systematically under-report exactly the risk this stage exists to catch.
-- Treat the "confidence" and evidence-citation requirements in these prompts as non-negotiable — an agent with repo access that doesn't show its file/line evidence is indistinguishable from one that's speculating, and you lose the entire reason for giving it codebase access.
+- For `system-impact-analysis` and `data-model-review` specifically, if your services live in separate repos, the agent needs access to all of them to find cross-repo dependencies — a single-repo view will systematically under-report exactly the risk these skills exist to catch.
+- Treat the "confidence" and evidence-citation requirements in these skills as non-negotiable — an agent with repo access that doesn't show its file/line evidence is indistinguishable from one that's speculating, and you lose the entire reason for giving it codebase access.
 - These are a starting point per the Anthropic prompting guidance: pair them with a `CLAUDE.md` at your repo root describing your architecture/conventions, so every agent invocation has that context without you repeating it in each prompt.
-- Before running any of these against real code, confirm the agent's runtime can't reach production credentials or real customer data — see §4.5 (AI Agent Access Boundaries) in the main workflow document. This matters more here than it would for a generic coding assistant, since these prompts are explicitly designed to give the agent broad read access across services.
-- None of the review prompts above are a substitute for the human merge gate (workflow doc, Stage 3) — they produce evidence a human approver uses, the same way a linter or CI check does, not an approval in themselves.
+- Before running any of these against real code, confirm the agent's runtime can't reach production credentials or real customer data — see "AI Agent Access Boundaries" in Part 1 of this document. This matters more here than it would for a generic coding assistant, since these skills are explicitly designed to give the agent broad read access across services.
+- None of the review skills above are a substitute for a human merge gate — they produce evidence a human approver uses, the same way a linter or CI check does, not an approval in themselves.
+- Read every skill's "Could Not Verify / Gaps" output as a real action item, not boilerplate — it names exactly who needs to close the gap. A pipeline where every skill's gaps get silently dropped on the floor is functionally the same as not having Self-Verification at all.
+
+---
+
+# Part 3 — PI Planning Skill
+
+A portfolio-level planning prompt — distinct from the per-feature skills in Part 2. Where those operate on one feature at a time, this operates across **everything in flight for a Program Increment (PI)**: multiple features, multiple teams, a fixed sprint cadence, and a real end date (program date, UAT date, or team-specific date).
+
+**Core design principle:** this skill does not produce a schedule from weak inputs. A backward plan built on guessed story points or assumed team capacity is worse than no plan — it looks authoritative and isn't. So it runs in two phases, and **refuses to proceed past Phase 1 until the data is actually sufficient.**
+
+---
+
+## Phase 1 — Data Sufficiency Gate
+
+*(Run this first, always. Its only job is to determine whether you have enough real data to plan against — and if not, to extract it from the user rather than filling gaps itself.)*
+
+```
+You are checking whether the inputs for PI planning are sufficient to produce a real backward
+schedule — not producing the schedule yet. Your job is to challenge weak or missing data, not to
+politely accept rough estimates and silently firm them up yourself.
+
+CONTEXT:
+- PI length and sprint cadence: [e.g. "6 sprints, 2 weeks each"]
+- Target end date and what it's anchored to: [program date / UAT date / team-specific date]
+- Features/epics in scope for this PI: [list — may be rough]
+- Teams involved: [list]
+- Any story-level data available (acceptance criteria, HITL/AFK tags, dependency commitment
+  outcomes from a firm-ask exchange with dependent teams): [paste whatever exists — may be
+  partial or absent]
+- Team capacity/velocity data: [paste whatever exists — may be rough or absent]
+
+INSTRUCTIONS:
+1. For each feature in scope, check whether it has actual sized stories (not just a feature name
+   or a one-line description). If a feature is only a name or a paragraph, flag it as
+   insufficiently broken down — do not estimate its size yourself, and do not let the planning
+   proceed with a guessed point value standing in for real sizing.
+2. For each team involved, check whether you have real velocity/capacity data (points per sprint,
+   % allocation to this PI vs. other work, planned time off/holidays in the PI window). If this
+   is missing or vague ("they're pretty fast"), flag it explicitly — do not assume an industry-
+   average velocity or back into one from team size.
+3. For each cross-team dependency, check whether it has an actual Committed/Conditional/Conflict
+   outcome with a real date from a dependency-firm-ask exchange, or is still just a hopeful
+   mention ("Team X will probably help with this"). Treat anything short of a Committed/
+   Conditional outcome with a real date as missing data, not as a soft yes.
+4. Check whether the end date itself is real and fixed, or aspirational. Ask directly: is this
+   date contractually/externally fixed (a regulator deadline, a customer commitment), or is it a
+   target the org would like to hit but could move? This materially changes what "the plan" means
+   — a fixed date means scope/team is the lever; an aspirational date means the date itself can be
+   a lever too.
+5. Do not proceed to Phase 2 for any feature/team where the above checks fail. Instead, produce a
+   specific list of exactly what's missing and exactly who needs to provide it — not a generic
+   "need more data" message.
+6. If some features/teams pass and others don't, say so explicitly — partial planning on the
+   ones with real data is fine; silently extending that confidence to the ones without it is not.
+
+OUTPUT FORMAT:
+## Sufficiency Check
+| Feature | Sized Stories? | Team(s) | Velocity/Capacity Known? | Dependencies Resolved? | Ready for Phase 2? |
+|---|---|---|---|---|---|
+
+## End Date Reality Check
+[Fixed/external — explain what it's anchored to / Aspirational — explain who could move it and
+under what circumstance]
+
+## Missing Data — Specific Asks
+- [exactly what's missing] — [exactly who should provide it] — [why Phase 2 can't proceed without
+  it for this specific feature/team]
+
+## Ready to Proceed
+[List features/teams with sufficient data — Phase 2 can run on these now.]
+[List features/teams that need the missing data resolved first — do not plan these yet.]
+```
+
+---
+
+## Phase 2 — Backward Schedule & Sprint Grid
+
+*(Only run this for features/teams that passed Phase 1. Produces the actual sprint-by-sprint plan and the backward critical path to the end date.)*
+
+```
+You are building a PI sprint plan and backward schedule from the end date, using ONLY the
+features/teams confirmed sufficient in Phase 1. Your job is to fit real work into real capacity
+and surface the conflicts, not to make the numbers work by quietly shaving estimates.
+
+CONTEXT:
+- Phase 1 output (sufficiency check, ready-to-proceed list): [paste — REQUIRED]
+- Sprint cadence and PI length: [e.g. "6 sprints, 2 weeks, starting [date]"]
+- End date and what it's anchored to: [paste from Phase 1]
+- For each ready feature: sized stories, HITL/AFK tags, dependency outcomes with dates
+- For each team: velocity/capacity, allocation %, known time off in the PI window
+
+INSTRUCTIONS:
+1. Build the backward schedule first: starting from the end date, work backward through required
+   lead times — UAT/test cycles, release-train cutoffs (per your scheduled release cadence),
+   dependency commitment dates from firm-ask exchanges with dependent teams, and any known
+   integration/hardening sprint — to find the latest sprint each piece of work can start and
+   still hit the end date. Show this
+   explicitly as a chain, not just a final answer.
+2. Identify the critical path: the sequence of dependent work (across teams, where dependencies
+   exist) that has zero slack — if anything on this path slips, the end date slips. Name it
+   explicitly so it's clear what to protect.
+3. Build the sprint-by-team grid forward from sprint 1, respecting: each team's real velocity/
+   capacity, dependency commitment dates (work can't start before a dependency's committed date),
+   and HITL stories needing their decision resolved before the sprint they're scheduled in.
+4. Cross-check forward (capacity-driven) against backward (date-driven). Where they disagree —
+   capacity says a team can't start until sprint 3 but the backward schedule needed sprint 2 —
+   surface this as a named conflict, not a smoothed-over average. Do not silently resolve a
+   conflict by assuming overtime, scope cuts, or "we'll figure it out."
+5. For every team showing >100% allocation in any sprint, flag it explicitly — overcommitment
+   shown in a grid without a flag reads as "the plan handles it," which it doesn't.
+6. For every Conditional dependency outcome from a firm-ask exchange, show what sprint the precondition
+   needs to resolve by in order to not break the schedule — make the conditional's deadline
+   visible, not just the dependency's.
+7. If the schedule doesn't fit (critical path exceeds available sprints, or a team is
+   structurally overcommitted across the whole PI, not just one sprint), say so plainly and name
+   the levers available (cut scope, move the date, add capacity, resequence) rather than
+   presenting an infeasible grid as if it were a real plan.
+
+OUTPUT FORMAT:
+## Backward Schedule (End Date → Sprint 1)
+[End date] ← [lead time/step] ← [lead time/step] ← ... ← [latest start, by sprint]
+
+## Critical Path
+[Named sequence of dependent work across teams with zero slack — this is what protects the end
+date]
+
+## Sprint-by-Team Grid
+| Sprint | Team A | Team B | Team C | ... |
+|---|---|---|---|---|
+| 1 | [work, % allocation] | ... | ... | |
+| 2 | ... | | | |
+[... through PI length]
+
+## Conflicts Found
+- [team/sprint] — [forward capacity says X, backward schedule needs Y] — [not resolved silently]
+- [team] — [>100% allocation in sprint N] — flagged
+
+## Conditional Dependencies — Precondition Deadlines
+- [dependency] — precondition [X] must resolve by sprint [N] or the schedule breaks
+
+## Feasibility Verdict
+[Fits as planned / Does not fit — here are the levers: scope cut (specify), date move (specify
+new feasible date), added capacity (specify where), resequencing (specify)]
+```
+
+---
+
+## Notes on using this
+
+- **Phase 1 is not a formality.** If it's tempting to skip straight to Phase 2 because "we kind of know the rough shape," that's exactly the situation Phase 1 exists to catch — rough shape is what produces a schedule that's confidently wrong.
+- This consumes the outputs of the per-feature skills in Part 2 rather than replacing them: `story-creation` gives you sized, tagged stories; `dependency-firm-ask` gives you dependency commitment dates with real outcomes. The richer those per-feature artifacts are, the less Phase 1 has to chase down manually.
+- Re-run Phase 2 whenever a Conditional dependency resolves, a Conflict gets escalated and settled, or a team's capacity changes — treat the grid as living, not a one-time output frozen at PI start.
+- For mixed-cadence teams (if that ever comes up) or multi-PI horizons, this would need extending — as scoped now, it assumes the fixed sprint length/PI length you specified.
