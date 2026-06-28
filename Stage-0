@@ -1,3 +1,20 @@
+# AI Review & Generation Prompts — Stage 1 through Stage 7
+
+Built for **Claude Code** (or an equivalent agent with filesystem/repo access). Covers generation steps (Stage 2-Draft, Stage 3-Implement) and review steps (Stage 1, 2a–2d, 3 review, 3-Security, 3-Infra, 4–7) across the full workflow. Each prompt assumes the agent can read the repository, run search/grep, and read existing docs (Confluence exports, ADRs, schema files) if you point it at them.
+
+**How to use these:**
+- Drop the relevant prompt into Claude Code at the matching stage, with the ticket/Design Doc link filled in.
+- Every prompt ends with a **required output format** — keep that, so findings can be pasted straight into Jira/Confluence and stay consistent reviewer-to-reviewer.
+- Every prompt includes a grounding instruction (don't speculate, read the actual files) — this is what makes the difference between a real review and a generic one.
+- Stage 2 has two parts: **Stage 2-Draft generates** the Design Doc, **Stage 2a/2b/2c/2d review and plan** against it (architecture, NFRs, data model, and test strategy respectively). The architect is accountable for the final design either way — the draft just removes the blank-page problem and front-loads the codebase research.
+- **Stage 2d (Test Strategy)** decides *what kind* of testing this change needs — and at what pyramid layer — before implementation starts. This exists precisely because "write tests" left implicit defaults to thin unit-test coverage and skips the cross-service contract tests that actually catch the failures this whole workflow is designed to prevent.
+- **Stage 3 has three review angles, run as separate sessions from the implementing agent and from each other:** correctness/design-conformance (Stage 3 review), security at the code level (Stage 3-Security — distinct from Stage 2's design-level security sign-off, since secure designs can still have insecure implementations), and infrastructure/IaC where applicable (Stage 3-Infra). None of these substitute for the human merge gate — they're evidence the human approver uses, not the approval itself.
+
+---
+
+## Stage 1 — System Impact Analysis
+
+```
 You are reviewing a proposed change for its impact across our codebase BEFORE any design or
 code is written. Your job is to find what this idea will actually touch — not to evaluate
 whether it's a good idea.
@@ -15,10 +32,15 @@ INSTRUCTIONS:
    - Any other service in the repo that calls it or is called by it (search for client imports,
      HTTP calls, message queue topics/subscriptions, shared DB tables)
    - Whether it owns or shares any database tables/schemas that this change would need to touch
-3. Flag anything that crosses a service boundary, even if the requester didn't mention it.
-4. Do not speculate about code you have not opened — if you reference a file or function,
+3. Check whether this idea is likely to require any NEW external dependency (a new third-party
+   package, a new SaaS/external API integration) based on what's being asked for and what's
+   already available in the codebase. Flag this explicitly — new external dependencies carry
+   license, supply-chain, and compliance review needs that are easy to miss until someone's
+   already mid-implementation.
+4. Flag anything that crosses a service boundary, even if the requester didn't mention it.
+5. Do not speculate about code you have not opened — if you reference a file or function,
    you must have actually read it.
-5. Note your confidence level for each finding (High = read the code directly, Medium = inferred
+6. Note your confidence level for each finding (High = read the code directly, Medium = inferred
    from naming/structure, Low = guessed).
 
 OUTPUT FORMAT (use exactly this structure):
@@ -31,8 +53,669 @@ OUTPUT FORMAT (use exactly this structure):
 ## Data Touched
 - [table/schema name] — shared with: [other services/teams, if any]
 
+## New External Dependencies Likely Needed
+- [package/integration] — [why it appears needed] — flag for license/supply-chain review
+
 ## Risk Tier Recommendation
-[Tier 1/2/3] — [one-sentence justification based on auto-escalation rules: PII/schema/auth/cross-service]
+[Tier 1/2/3] — [one-sentence justification based on auto-escalation rules: PII/schema/auth/infra/cross-service]
 
 ## Open Questions for Service Owners
 - [anything you couldn't resolve from the code alone — who needs to be looped in]
+```
+
+---
+
+## Stage 2-Draft — Design Doc Generation
+
+*(Runs before Stage 2a. Produces a first full draft for the architect to edit, not a final document — the architect remains accountable for the design and must review every section before it goes to review.)*
+
+```
+You are drafting a first-pass Design Doc for an architect to edit and finalize. Your job is to
+produce a grounded, evidence-based draft — not to make the design decision yourself. Where a
+real architectural choice is needed and the codebase doesn't make the answer obvious, present
+options with trade-offs rather than silently picking one.
+
+CONTEXT:
+- Idea/ticket: [paste Jira ticket link + summary]
+- Stage 1 System Impact Map: [paste link/content — REQUIRED, do not draft without this]
+- Design Doc template: [paste your Confluence template structure]
+
+INSTRUCTIONS:
+1. Read the Stage 1 Impact Map first. Every service/dependency it lists must be addressed
+   somewhere in your draft — don't narrow scope without saying so explicitly.
+2. For the "current state" / "how this works today" framing sections: read the actual code for
+   every claim you make. Never write "currently X does Y" without having opened the file that
+   proves it. Cite file:line for every factual claim about existing behavior.
+3. For "proposed approach": look for existing patterns elsewhere in the codebase that solve a
+   similar problem (similar service, similar data flow) and propose building on them rather than
+   inventing a new pattern, unless you can articulate why the existing pattern doesn't fit.
+4. For "alternatives considered": you must produce at least two real alternatives grounded in
+   what's actually feasible in this codebase (not generic textbook alternatives) — including the
+   "do nothing differently / extend existing X" option.
+5. For the NFR section, do not write soft placeholders like "should be performant." For each
+   category (performance, scalability, availability, security, observability, backward
+   compatibility, cost), either propose a concrete target based on comparable existing
+   endpoints/services you found in the code, or explicitly mark it "NEEDS ARCHITECT INPUT —
+   no comparable precedent found in codebase."
+6. For data model changes: describe the current schema as found in code (file:line), and the
+   proposed change — flag this section as requiring the formal schema review regardless of what
+   you draft.
+7. Tag every section/claim as one of: [GROUNDED — file:line evidence], [INFERRED — reasonable but
+   not directly verified], or [NEEDS ARCHITECT DECISION — a real judgment call, not something the
+   code can answer]. This is what lets the architect skip straight to the parts that actually
+   need their judgment instead of re-deriving everything from scratch.
+
+OUTPUT FORMAT (mirror your Confluence Design Doc template, with these tags inline):
+## Problem Statement
+[from ticket — flag if ticket scope seems inconsistent with Stage 1 findings]
+
+## Current State
+[GROUNDED/INFERRED tagged claims, each with file:line]
+
+## Proposed Approach
+[primary recommendation, tagged, with reasoning]
+
+## Alternatives Considered
+- [Alternative 1] — trade-offs — [tag]
+- [Alternative 2] — trade-offs — [tag]
+- [Extend existing pattern, if found] — trade-offs — [tag]
+
+## Data Model Changes
+[current schema w/ file:line, proposed change, "requires formal schema review" flag]
+
+## NFR Targets
+| Category | Proposed Target | Basis | Tag |
+|---|---|---|---|
+
+## Open Decisions for Architect
+[every NEEDS ARCHITECT DECISION item, pulled into one list for fast scanning]
+```
+
+---
+
+## Stage 2a — Design Review (architecture/approach)
+
+```
+You are reviewing a Design Doc against the actual codebase, acting as a second architect —
+not rubber-stamping, and not nitpicking style.
+
+CONTEXT:
+- Design Doc: [paste link or content]
+- System Impact Map from Stage 1: [paste link or content]
+
+INSTRUCTIONS:
+1. Read the Design Doc fully before touching the codebase.
+2. For every claim the doc makes about existing code ("X currently does Y", "we can reuse Z",
+   "this won't affect W") — verify it against the actual code. Quote the file/line that confirms
+   or contradicts the claim. Do not take the doc's claims at face value.
+3. Check whether the proposed approach is consistent with existing patterns in the codebase for
+   similar problems (e.g. is there already an established pattern for retries, auth checks,
+   pagination, etc. that this design ignores or duplicates?).
+4. Check the alternatives-considered section: are there simpler existing mechanisms in the
+   codebase that would solve this, which the doc didn't mention?
+5. Identify anything in the Stage 1 Impact Map that the design doesn't actually address.
+
+OUTPUT FORMAT:
+## Verified Claims
+- [claim from doc] — confirmed by [file:line]
+
+## Contradicted or Unverifiable Claims
+- [claim from doc] — actual code shows [file:line, what it actually does]
+
+## Pattern Consistency
+- [existing pattern found elsewhere in codebase] — design [follows it / diverges from it: explain]
+
+## Impact Map Coverage Gaps
+- [item from Stage 1 map not addressed in design]
+
+## Verdict
+[Approve / Approve with changes / Needs rework] — [reasoning]
+```
+
+---
+
+## Stage 2b — NFR Review
+
+```
+You are reviewing the Non-Functional Requirements section of a Design Doc against what the
+codebase can actually deliver today — not against the doc's own assertions.
+
+CONTEXT:
+- Design Doc NFR section: [paste]
+- Relevant service(s): [from Stage 1 impact map]
+
+INSTRUCTIONS:
+1. For each NFR category below, check the codebase for current actuals, then compare to the
+   doc's stated target. If the doc gives no target for a category, flag it as missing — don't fill
+   it in yourself.
+   - Performance/latency: find existing benchmarks, load test configs, or APM dashboards-as-code
+     if present. What's the current baseline for similar endpoints?
+   - Scalability: check current resource limits/autoscaling config (k8s manifests, Terraform,
+     etc.) — does the stated expected load fit within them?
+   - Availability: check existing SLOs/error budgets in repo config if defined.
+   - Security/data classification: check how similar sensitive-data flows are currently handled
+     (encryption at rest/in transit, access control middleware) and whether this design matches
+     that bar.
+   - Observability: check whether the design's proposed metrics/logs follow existing
+     instrumentation patterns (same libraries, naming conventions, dashboards-as-code).
+   - Backward compatibility: if this changes a contract, check actual current consumers
+     (found in Stage 1) for what would break.
+2. Do not accept "should be fine" or "no impact" as a target — every NFR needs a number or an
+   explicit, code-grounded justification for why it doesn't apply.
+
+OUTPUT FORMAT:
+## NFR Coverage Table
+| Category | Doc's Stated Target | Current Codebase Baseline | Gap/Risk |
+|---|---|---|---|
+| Performance | ... | ... | ... |
+| Scalability | ... | ... | ... |
+| Availability | ... | ... | ... |
+| Security | ... | ... | ... |
+| Observability | ... | ... | ... |
+| Backward compat | ... | ... | ... |
+
+## Missing NFRs
+- [category with no target stated in doc]
+
+## Blocking Issues
+- [anything that should stop this from moving to implementation as-is]
+```
+
+---
+
+## Stage 2c — Data Model Review
+
+*(Feeds into your existing formal schema review — this prompt prepares the evidence for that review, it doesn't replace it.)*
+
+```
+You are preparing a data model change for formal schema review by checking it against actual
+current schema and usage in the codebase.
+
+CONTEXT:
+- Proposed schema change: [paste migration/DDL or description]
+- Design Doc: [link]
+
+INSTRUCTIONS:
+1. Find the current schema definition for every table being changed (migration files, ORM
+   models, schema.sql, etc. — use what the codebase actually has, not what the doc assumes).
+2. Search the codebase for every read/write access to these tables — across ALL services, not
+   just the one being changed. Look for raw SQL, ORM model usage, and any reporting/analytics
+   jobs that query these tables directly.
+3. For each consumer found, assess: does the proposed change break it (column removed/renamed/
+   retyped, nullable changed, etc.)?
+4. Check whether a migration plan is specified for existing data (backfill, default values,
+   nullable transition period) — flag if missing.
+5. Check whether this table is referenced in any data retention/compliance-relevant logic
+   (look for PII handling, encryption, audit-log table references).
+
+OUTPUT FORMAT:
+## Current Schema (as found in code)
+[table: columns, types, constraints, with file path]
+
+## All Consumers Found
+- [service/job] — [file:line] — access type: [read/write] — broken by this change: [yes/no/unsure]
+
+## Migration Plan Assessment
+[present and adequate / present but gaps: list / missing entirely]
+
+## Compliance-Relevant Flags
+- [any PII/audit-log/retention implication found]
+
+## Recommendation for Schema Review Board
+[Ready for review / Needs more migration detail / Needs consumer sign-off from: list teams]
+```
+
+---
+
+## Stage 2d — Test Strategy
+
+*(Runs alongside 2a/2b/2c, after the Design Doc draft exists and before implementation starts. Produces the test plan as its own reviewable artifact — not a checkbox inside the Design Doc — so the shape of testing is a constraint on implementation, not an afterthought discovered at PR time.)*
+
+```
+You are defining the test strategy for an approved-pending Design Doc, BEFORE any implementation
+code is written. Your job is to decide what kinds of verification this change actually needs and
+at what level of the test pyramid — not to write the tests themselves yet.
+
+CONTEXT:
+- Design Doc (draft or approved): [paste link/content]
+- Stage 1 System Impact Map: [paste link/content]
+- NFR targets from Stage 2b: [paste]
+- Existing test setup: [point to test directories, CI config, contract test tooling if any]
+
+INSTRUCTIONS:
+1. Read the existing test suite structure for every service touched (per the Impact Map) — find
+   what test types already exist (unit, integration, contract, e2e, load, security) and how
+   they're run, rather than assuming a textbook pyramid applies uniformly.
+2. For each service/boundary in the Impact Map, decide the minimum sufficient test pyramid for
+   THIS change specifically:
+   - Unit: which new logic/branches need isolated coverage (list functions/modules, not "good
+     coverage" generically)
+   - Integration: which real (or realistically faked) dependencies must be exercised together
+     — e.g. service + its actual DB, service + its actual cache
+   - Contract: for every cross-service boundary found in the Impact Map, is there a contract test
+     verifying the producer and consumer agree on the schema? If none exists today for this
+     boundary, flag it as a gap to close, not optional
+   - End-to-end: only where a multi-service user-facing flow changes — name the specific flow,
+     don't default to "add an e2e test" for everything
+   - NFR-specific verification: map each NFR target from Stage 2b to a concrete verification
+     method (load test for performance/scale targets, security scan for the security target,
+     chaos/failure-injection for availability targets) — an NFR with no verification method is
+     a target nobody will actually check
+3. Be explicit about what's OUT of scope for this change's testing and why (e.g. "not
+   re-testing existing checkout flow, unchanged by this work") — this is what keeps the pyramid
+   proportional instead of growing unboundedly.
+4. Flag any cross-service boundary from the Impact Map that has NO contract test today,
+   regardless of whether this change requires one — this is a standing gap worth surfacing
+   even if it's not blocking.
+
+OUTPUT FORMAT:
+## Test Pyramid for This Change
+| Layer | What's Covered | New or Existing | Owner |
+|---|---|---|---|
+| Unit | ... | ... | ... |
+| Integration | ... | ... | ... |
+| Contract | ... | ... | ... |
+| E2E | ... | ... | ... |
+
+## NFR Verification Mapping
+| NFR Target (Stage 2b) | Verification Method | New or Existing |
+|---|---|---|
+
+## Explicitly Out of Scope
+- [area not being tested by this change, and why that's safe]
+
+## Standing Gaps Found (not blocking, but flag)
+- [cross-service boundary with no contract test, etc.]
+
+## Recommendation
+[Test plan sufficient to proceed to implementation / Gaps must close first — list which]
+```
+
+---
+
+## Stage 3 — Implementation (writing the code)
+
+*(Produces the actual diff from the approved Design Doc. Run the PR-time review below as a SEPARATE agent session afterward — never let the implementing agent review its own work; it shares the same blind spots that produced the code in the first place.)*
+
+```
+You are implementing an approved Design Doc as production code in this repository. Your job is
+to follow the design faithfully — flag and stop for anything ambiguous rather than guessing.
+
+CONTEXT:
+- Approved Design Doc: [paste link/content — REQUIRED]
+- ADR(s): [paste, if any]
+- Stage 1 Impact Map: [paste link/content]
+- Stage 2d Test Strategy: [paste link/content — REQUIRED]
+- Linked Jira story/task: [paste]
+- Relevant repo(s): [paths — include ALL repos if this spans services]
+
+INSTRUCTIONS:
+1. Read the full Design Doc and ADR before writing any code. If anything in the design is
+   underspecified for implementation (e.g. it says "validate input" without specifying rules,
+   or names a field that doesn't exist in the current schema), STOP and ask rather than inventing
+   a decision — log it under "Clarifications Needed" instead of silently choosing.
+2. Before changing any function/module, find and read its current callers across the codebase
+   (not just the file you're editing) — this is the same check Stage 1 did at the idea level;
+   redo it now at the code level, since the design may have evolved since Stage 1.
+3. Follow existing patterns in the codebase for error handling, logging, and testing — match the
+   conventions already present in neighboring files, don't introduce a new style.
+4. Implement every NFR item the design specified as concrete code, not a comment promising it
+   later: add the actual metric/log call, the actual input validation, the actual migration
+   script — whatever the NFR section committed to.
+5. Implement the test pyramid exactly as scoped in the Stage 2d Test Strategy — unit, integration,
+   contract, e2e, NFR verification — at the layers it specifies. Do not invent additional test
+   scope beyond the plan, and do not skip a layer the plan called for. If you find the plan is
+   wrong or insufficient once you're in the actual code (e.g. a contract test the plan didn't
+   anticipate is clearly needed), flag it under "Clarifications Needed" rather than silently
+   deciding for yourself.
+6. Do not silently expand scope beyond the Design Doc. If you notice an adjacent improvement
+   worth making, note it separately rather than including it in this diff.
+7. Use temporary scratch files/scripts if useful for working through the implementation, but
+   leave the final repository clean — remove scratch files before finishing, unless you flag a
+   reason to keep one (e.g. a migration verification script the team should keep).
+
+OUTPUT FORMAT:
+## Implementation Summary
+[what was built, file by file, in plain language]
+
+## Design Conformance Self-Check
+- [design requirement] — implemented at [file:line]
+
+## Clarifications Needed
+[anything underspecified in the design that you stopped on instead of guessing — should block
+merge until the architect answers, not be silently resolved]
+
+## NFR Implementation Evidence
+- [NFR item from design] — [file:line of actual code implementing it]
+
+## Tests Added/Updated (per Stage 2d Test Strategy)
+[file paths, what each test verifies, which layer of the plan it satisfies]
+
+## Test Plan Deviations
+[anything where you found the Stage 2d plan needed adjustment, flagged rather than silently changed]
+
+## Scope Check
+[Confirmed: matches Design Doc scope / Flagged: see adjacent-improvement notes above]
+
+## Ready for Independent PR Review
+[Yes / No — if no, why]
+```
+
+---
+
+## Stage 3 — Implementation Review (PR-time)
+
+```
+You are reviewing a pull request against its linked Design Doc and ADR — checking whether the
+code actually implements what was approved, not just whether the code looks clean.
+
+CONTEXT:
+- PR diff: [paste or point to branch]
+- Linked Design Doc: [link/content]
+- Linked ADR(s): [link/content]
+
+INSTRUCTIONS:
+1. Read the Design Doc and ADR(s) first to know what was actually approved.
+2. Go through the diff and map each significant change to a part of the design. Flag anything
+   in the code that isn't traceable to the design (scope creep) and anything in the design that
+   isn't in the code (incomplete implementation).
+3. Check the NFR checklist items from the design (metrics added, migration tested, etc.)
+   against actual code — e.g. if the design said "add latency metric on endpoint X," grep for
+   the actual instrumentation call in the diff, don't take a checked checkbox as proof.
+4. Check for usages of this changed code elsewhere in the codebase that the PR author may have
+   missed (search for all callers/importers of changed functions/classes).
+5. Standard correctness review: logic errors, unhandled edge cases, error handling, test
+   coverage for the new behavior — but ground every finding in the actual diff and surrounding
+   code, not generic advice.
+
+OUTPUT FORMAT:
+## Design Conformance
+- Implemented as designed: [list]
+- Deviations from design: [list, with file:line — flag if undocumented]
+
+## NFR Checklist Verification
+- [NFR item] — [verified in code at file:line / NOT found in diff]
+
+## Missed Call Sites
+- [function/class changed] — also used in [file:line] — checked: [yes, compatible / yes, BREAKS / not checked]
+
+## Correctness Findings
+- 🔴 [blocking issue] — [file:line] — [why]
+- 🟡 [non-blocking concern] — [file:line] — [why]
+
+## Verdict
+[Ready to merge / Changes requested] — [summary]
+```
+
+---
+
+## Stage 3-Security — Security Review (code-level)
+
+*(Separate from Stage 2's design-level security input and from the Stage 3 correctness review above — a design can be approved as secure and the implementation can still introduce a vulnerability the design never specified at that level of detail. Required for Tier 3; recommended for Tier 2 touching auth/data access.)*
+
+```
+You are doing a security-focused review of this diff against the actual codebase — looking for
+vulnerabilities the implementation introduces, not re-litigating whether the design was a good
+idea.
+
+CONTEXT:
+- PR diff: [paste or point to branch]
+- Design Doc security/data-classification section: [paste from Stage 2]
+- Risk tier: [Tier 2/3]
+
+INSTRUCTIONS:
+1. For every new or modified endpoint/handler in the diff, check: is authentication/authorization
+   actually enforced in the code (find the actual middleware/decorator/check), not assumed because
+   a similar endpoint elsewhere has it. Quote the file:line that proves enforcement, or flag its
+   absence.
+2. For every place user input or external data enters the new code, check for injection risks
+   (SQL, command, template, deserialization) by reading how the input is actually used downstream
+   — not a generic "looks fine" pass.
+3. For any new handling of secrets, tokens, or credentials, confirm they're not logged, not
+   written to a field that gets persisted in plaintext, and not passed in a way that would put
+   them in version control history.
+4. For any new or modified data access touching PII/PHI/financial data (per the Design Doc's
+   classification), confirm encryption-at-rest/in-transit matches what similar existing sensitive
+   data flows do elsewhere in the codebase — find that existing flow and compare directly.
+5. Check dependency changes in this diff (see Stage 1.5 if this PR adds/upgrades a package) for
+   any known-vulnerable version, by checking the actual version pinned in the lockfile.
+6. Do not flag generic "best practice" suggestions with no concrete exploit path — every finding
+   needs a specific scenario describing how it could actually be exploited.
+
+OUTPUT FORMAT:
+## Auth/Authz Verification
+- [endpoint/handler] — enforcement found at [file:line] / **NOT FOUND — flag**
+
+## Injection Risk Review
+- [input entry point] — [how it's used downstream] — risk: [none/low/medium/high]
+
+## Secrets Handling
+- [any secret/credential touched] — [safe / concern: describe]
+
+## Sensitive Data Handling
+- [data touched] — [matches existing pattern at file:line / diverges: describe]
+
+## Dependency Risk
+- [new/changed dependency] — [version] — [known issues: yes/no, per available info]
+
+## Findings
+- 🔴 [exploitable issue] — [file:line] — [concrete exploit scenario]
+- 🟡 [hardening suggestion with concrete risk, not generic advice] — [file:line]
+
+## Verdict
+[Clear / Must fix before merge] — [list blocking items]
+```
+
+---
+
+## Stage 3-Infra — Infrastructure/IaC Review
+
+*(Run whenever the diff includes infrastructure-as-code changes — Terraform, Kubernetes manifests, IAM policies, network rules, queue/topic provisioning. These carry a different risk profile than application code and are easy to under-review if treated as "just more diff.")*
+
+```
+You are reviewing infrastructure-as-code changes against the actual current infrastructure state
+and the rest of the platform, not just checking that the syntax is valid.
+
+CONTEXT:
+- IaC diff: [paste or point to branch — Terraform/k8s manifests/IAM policies/etc.]
+- Design Doc: [link, if infra was anticipated there]
+- Stage 1 Impact Map: [link/content]
+
+INSTRUCTIONS:
+1. Read the actual current state of whatever this diff modifies (existing Terraform state/
+   manifests in the repo) — confirm what's changing relative to what's actually deployed, not
+   relative to what the diff author assumed was deployed.
+2. For any new or widened permission (IAM role, security group rule, network policy), state
+   exactly what access it grants and to what — flag anything broader than the stated need
+   (e.g. a wildcard resource ARN where a specific one would do).
+3. For any new compute/queue/topic/resource, check for cost and scaling implications by comparing
+   to similar existing resources in the repo (instance sizes, autoscaling config, retention
+   settings).
+4. Check whether this change could affect other services sharing the same infrastructure
+   (a shared VPC, a shared cluster, a shared queue) — cross-reference against the Stage 1 Impact
+   Map's listed dependencies.
+5. Confirm there's a way to revert this specific infra change independently of the application
+   code deploy (e.g. can the Terraform apply be rolled back without also reverting the app
+   version, or are they coupled in a way that complicates rollback).
+
+OUTPUT FORMAT:
+## Current vs Proposed State
+- [resource] — current: [...] — proposed: [...]
+
+## Permission Changes
+- [permission/rule] — grants: [exact scope] — broader than needed: [yes/no, why]
+
+## Cost/Scaling Impact
+- [resource] — comparison to existing: [finding]
+
+## Shared-Infrastructure Risk
+- [shared resource touched] — other services affected: [list, from Impact Map]
+
+## Rollback Independence
+[Infra rollback is independent of app deploy / Coupled — explain risk]
+
+## Verdict
+[Clear / Must fix before merge] — [list blocking items]
+```
+
+---
+
+## Stage 4 — Verification & NFR Validation Review
+
+```
+You are checking whether the test evidence attached to this ticket actually proves the NFR
+targets were met — not just that tests exist and passed.
+
+CONTEXT:
+- Design Doc NFR targets: [paste from Stage 2b]
+- Stage 2d Test Strategy: [paste link/content]
+- Test evidence attached: [paste test results, load test output, scan reports]
+- Relevant test code: [point to test files in repo]
+
+INSTRUCTIONS:
+1. Read the actual test code (not just the results summary) for each NFR target — confirm the
+   test genuinely exercises the scenario claimed (e.g. a "load test" that only sends 10 requests
+   doesn't validate a 10,000 req/s target).
+2. Compare each test's measured result against the target from Stage 2b. Flag any target with
+   no corresponding test at all.
+3. Check the implementation's tests against the Stage 2d Test Strategy layer by layer — confirm
+   every layer the plan called for (unit/integration/contract/e2e) actually has corresponding
+   tests in the diff, not just the easiest layer to write.
+4. For security: check whether the scan tool/config used actually covers the area changed (e.g.
+   a SAST scan on the whole repo doesn't substitute for a targeted check on a new auth path).
+5. For schema changes: confirm migration was actually tested against a realistic data volume/
+   shape, not just an empty test database.
+
+OUTPUT FORMAT:
+## Test Pyramid Coverage Check
+| Layer (per Stage 2d plan) | Tests Found in Diff? | Sufficient? |
+|---|---|---|
+
+## NFR Target vs Evidence
+| NFR Target | Evidence Provided | Test Actually Validates Target? | Gap |
+|---|---|---|---|
+
+## Untested Targets
+- [target with no real evidence]
+
+## Recommendation
+[Sufficient evidence to proceed / Gaps must be closed before release] — [list blocking gaps]
+```
+
+---
+
+## Stage 5 — Release Readiness Review
+
+```
+You are compiling the audit-ready release record for this change before it ships in the next
+release train.
+
+CONTEXT:
+- Ticket chain: [Idea ticket -> Design Doc -> ADR -> PR(s) -> test evidence, all links]
+- Risk tier: [from Stage 1]
+
+INSTRUCTIONS:
+1. Verify every link in the chain actually resolves and is internally consistent (e.g. the PR
+   really implements the linked design, the test evidence really matches the linked NFRs —
+   cross-check against your own findings from Stages 2-4 if you produced them).
+2. Confirm a rollback plan exists and is specific (not "we'll roll back if needed" — check for
+   an actual mechanism: feature flag, previous version tag, migration down-script).
+3. For Tier 3: confirm security/compliance sign-off is recorded, not just requested.
+4. Identify anything in this change that depends on another team's unreleased work or an
+   unreleased migration, by checking actual code dependencies (imports, API calls to
+   not-yet-deployed endpoints).
+
+OUTPUT FORMAT:
+## Traceability Chain Check
+[Complete and consistent / Broken at: specify link]
+
+## Rollback Plan
+[Specific mechanism found: describe / Missing or vague — flag]
+
+## Sign-offs (Tier 2/3)
+- [required approver] — [recorded: yes/no, link]
+
+## Cross-Team Dependency Risks
+- [dependency found in code] — [status: deployed/not yet deployed]
+
+## Release Recommendation
+[Clear to release / Hold — reasons]
+```
+
+---
+
+## Stage 6 — Post-Release Validation Review
+
+```
+You are checking, shortly after deployment, whether this change is behaving as predicted —
+using actual observability data and code, not assumptions.
+
+CONTEXT:
+- What was deployed: [PR/release link]
+- Predicted NFR targets: [from Stage 2b]
+- Access to: [logs/metrics/dashboards, however available to you]
+
+INSTRUCTIONS:
+1. Compare actual post-deploy metrics (latency, error rate, throughput) against the Stage 2b
+   targets, where data is available to you.
+2. Check error logs/alerts for anything related to the changed code paths (search by service/
+   endpoint name, not generic log scanning).
+3. If anomalies are found, trace them back to the specific code change using the diff from
+   Stage 3, rather than describing them generically.
+
+OUTPUT FORMAT:
+## Actuals vs Predicted
+| Metric | Target | Actual | Status |
+|---|---|---|---|
+
+## Anomalies Found
+- [anomaly] — traced to: [file:line / "could not trace with available data"]
+
+## Recommendation
+[Healthy, no action / Monitor / Recommend rollback — reasoning]
+```
+
+---
+
+## Stage 7 — Retrospective Review
+
+```
+You are doing a closed-loop retrospective on this change: did our impact analysis at Stage 1
+actually match what happened in the codebase and in production?
+
+CONTEXT:
+- Stage 1 Impact Map: [link/content]
+- Actual PR diff(s) that shipped: [link]
+- Any incident/anomaly reports from Stage 6: [link, if any]
+
+INSTRUCTIONS:
+1. Compare the services/modules predicted as "touched" in Stage 1 against what the actual
+   merged diff(s) touched (search the real diff, don't just trust the PR description).
+2. Identify anything touched in reality that was NOT predicted — this is the specific signal
+   that should improve the Impact Analysis template or the auto-escalation tiering rules.
+3. If there was a production anomaly (Stage 6), check whether it traces to something missed at
+   Stage 1 or Stage 2 review, and name which stage's review should have caught it.
+
+OUTPUT FORMAT:
+## Predicted vs Actual Impact
+- Correctly predicted: [list]
+- Missed (touched in reality, not predicted): [list, with file:line evidence]
+
+## Process Improvement Signal
+[Specific, concrete suggestion for the Impact Map template, tiering rule, or review prompt above
+that would have caught the miss — not a generic "be more thorough"]
+
+## Closure
+[Retro complete — link this output back into the System Impact Map template repository]
+```
+
+---
+
+### Notes on using these with Claude Code
+
+- These assume the agent is pointed at a checked-out copy of the repo (or repos, for cross-service checks) — give it the actual paths, don't paste code snippets when the agent can read the files itself.
+- For Stage 1 and Stage 2c specifically, if your services live in separate repos, the agent needs access to all of them to find cross-repo dependencies — a single-repo view will systematically under-report exactly the risk this stage exists to catch.
+- Treat the "confidence" and evidence-citation requirements in these prompts as non-negotiable — an agent with repo access that doesn't show its file/line evidence is indistinguishable from one that's speculating, and you lose the entire reason for giving it codebase access.
+- These are a starting point per the Anthropic prompting guidance: pair them with a `CLAUDE.md` at your repo root describing your architecture/conventions, so every agent invocation has that context without you repeating it in each prompt.
+- Before running any of these against real code, confirm the agent's runtime can't reach production credentials or real customer data — see §4.5 (AI Agent Access Boundaries) in the main workflow document. This matters more here than it would for a generic coding assistant, since these prompts are explicitly designed to give the agent broad read access across services.
+- None of the review prompts above are a substitute for the human merge gate (workflow doc, Stage 3) — they produce evidence a human approver uses, the same way a linter or CI check does, not an approval in themselves.
