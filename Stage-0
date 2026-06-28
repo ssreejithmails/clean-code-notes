@@ -12,6 +12,64 @@ Built for **Claude Code** (or an equivalent agent with filesystem/repo access). 
 
 ---
 
+## Stage 0 — PRD Generation
+
+*(Runs at intake, before Stage 1. Produces a first full draft for the PM to edit and finalize — same pattern as Stage 2-Draft. This is what Stage 1 and Stage 2-Draft below should be reading, not a one-line ticket summary.)*
+
+```
+You are drafting a first-pass PRD for a Product Manager to edit and finalize. Your job is to
+turn a raw idea/ask into a structured, falsifiable requirements document — not to invent product
+strategy. Where the ask is ambiguous about scope or priority, surface the ambiguity explicitly
+rather than resolving it yourself.
+
+CONTEXT:
+- Raw idea/ask: [paste the original request, however informal]
+- Any prior related PRDs/tickets in this product area: [links, if known]
+- PRD template: [paste your Confluence template structure]
+
+INSTRUCTIONS:
+1. If you have repo access, do a light pass to check whether something resembling this already
+   exists (similar feature, similar flag, similar endpoint) — note it if so, rather than assuming
+   this is greenfield. This isn't a full impact analysis (that's Stage 1); it's a sanity check on
+   whether the ask is actually new.
+2. Write the problem statement in terms of the user/business outcome, not the solution — if the
+   raw ask already prescribes a specific technical solution, separate "what problem this solves"
+   from "the asker's proposed solution" so Stage 1/2 aren't anchored to an unvalidated approach.
+3. Write acceptance criteria as specific, testable statements ("a user can X and sees Y"), not
+   vague goals ("improve the experience"). Every acceptance criterion should be falsifiable —
+   someone should be able to look at the finished feature and say yes/no, did this happen.
+4. Write explicit non-goals: what this PRD is deliberately NOT solving, especially anything
+   adjacent that someone might assume is included. This is what stops scope from silently
+   expanding at Design or Implementation time.
+5. Propose a success metric that's measurable post-launch, not just "users are happy."
+6. Flag anything in the raw ask that's ambiguous about priority, scope, or audience as an open
+   question for the PM — do not silently pick an interpretation.
+
+OUTPUT FORMAT (mirror your Confluence PRD template):
+## Problem Statement
+[user/business problem, separated from any prescribed solution]
+
+## Target User / Context
+[who this is for, when/why they'd encounter it]
+
+## Requirements & Acceptance Criteria
+- [requirement] — acceptance criteria: [specific, testable]
+
+## Non-Goals
+- [explicitly out of scope, especially adjacent things someone might assume are included]
+
+## Success Metric
+[measurable, post-launch]
+
+## Open Questions for PM
+- [ambiguity in the raw ask that needs a human decision]
+
+## Possible Prior Art Found
+[similar existing feature/flag/endpoint, if found — or "none found"]
+```
+
+---
+
 ## Stage 1 — System Impact Analysis
 
 ```
@@ -20,27 +78,33 @@ code is written. Your job is to find what this idea will actually touch — not 
 whether it's a good idea.
 
 CONTEXT:
-- Idea/ticket: [paste Jira ticket link + one-paragraph summary]
+- Approved PRD: [paste link/content — REQUIRED for Tier 2/3; for Tier 1 a ticket summary is fine]
 - Affected area (if known): [e.g. "checkout-service" or "unsure"]
 
 INSTRUCTIONS:
-1. Search the codebase for the area(s) described above. Do not assume structure — locate the
+1. Read the PRD's requirements and acceptance criteria fully — your job is to map impact against
+   what the PRD actually commits to, including its non-goals (so you don't over-scope the impact
+   analysis to things explicitly excluded).
+2. Search the codebase for the area(s) implicated by the PRD. Do not assume structure — locate the
    actual services, modules, or packages involved by reading directory structure, README files,
    and CLAUDE.md/architecture docs if present.
-2. For each service/module you identify as touched, find:
+3. For each service/module you identify as touched, find:
    - Its declared API contracts (REST/GraphQL schemas, gRPC .proto files, event/message schemas)
    - Any other service in the repo that calls it or is called by it (search for client imports,
      HTTP calls, message queue topics/subscriptions, shared DB tables)
    - Whether it owns or shares any database tables/schemas that this change would need to touch
-3. Check whether this idea is likely to require any NEW external dependency (a new third-party
+4. Check whether this idea is likely to require any NEW external dependency (a new third-party
    package, a new SaaS/external API integration) based on what's being asked for and what's
    already available in the codebase. Flag this explicitly — new external dependencies carry
    license, supply-chain, and compliance review needs that are easy to miss until someone's
    already mid-implementation.
-4. Flag anything that crosses a service boundary, even if the requester didn't mention it.
-5. Do not speculate about code you have not opened — if you reference a file or function,
+5. Flag anything that crosses a service boundary, even if the requester didn't mention it.
+6. Cross-check your findings against the PRD's acceptance criteria — if a criterion implies a
+   touchpoint you haven't found evidence for in the code, flag it as an open question rather than
+   assuming it doesn't apply.
+7. Do not speculate about code you have not opened — if you reference a file or function,
    you must have actually read it.
-6. Note your confidence level for each finding (High = read the code directly, Medium = inferred
+8. Note your confidence level for each finding (High = read the code directly, Medium = inferred
    from naming/structure, Low = guessed).
 
 OUTPUT FORMAT (use exactly this structure):
@@ -333,44 +397,108 @@ OUTPUT FORMAT:
 
 ---
 
-## Stage 3 — Implementation (writing the code)
+## Stage 2e — Story Creation
 
-*(Produces the actual diff from the approved Design Doc. Run the PR-time review below as a SEPARATE agent session afterward — never let the implementing agent review its own work; it shares the same blind spots that produced the code in the first place.)*
+*(Runs after Stage 2/2a–2d are approved, before Stage 3-Implement. Produces the actual Jira stories the implementing agent will work from — this exists because a vague story breakdown is exactly what causes an implementing AI to fill gaps with assumptions instead of flagging them.)*
 
 ```
-You are implementing an approved Design Doc as production code in this repository. Your job is
-to follow the design faithfully — flag and stop for anything ambiguous rather than guessing.
+You are breaking an approved Design Doc and Test Strategy into implementable Jira stories. Your
+job is to produce stories specific enough that someone (human or AI) could implement each one
+without needing to re-derive scope from the design doc — not to summarize the design into vague
+restatements.
 
 CONTEXT:
-- Approved Design Doc: [paste link/content — REQUIRED]
+- Approved PRD: [paste link/content]
+- Approved Design Doc: [paste link/content]
+- Approved Test Strategy (Stage 2d): [paste link/content]
+- Jira project/template conventions: [paste, if you have a standard story format]
+
+INSTRUCTIONS:
+1. Read the Design Doc and Test Strategy fully. Every distinct piece of the proposed approach
+   should map to at least one story — do not collapse the whole design into a single story, and
+   do not split it so finely that individual stories are meaningless on their own.
+2. For each story, write acceptance criteria that trace back to a specific PRD requirement and a
+   specific part of the Design Doc — cite which requirement/section, don't just paraphrase the
+   design generically.
+3. For each story, note which Test Strategy layer(s) (unit/integration/contract/e2e/NFR
+   verification) it's responsible for, so test creation isn't an afterthought bolted on at the
+   end of implementation.
+4. Sequence the stories in a sensible implementation order (e.g. data model changes before the
+   code that depends on them, shared utilities before their consumers) and flag any dependencies
+   between stories explicitly.
+5. After drafting all stories, do a coverage check: list every requirement in the PRD and every
+   proposed-approach element in the Design Doc, and confirm each one is covered by at least one
+   story. Flag anything from the design that isn't covered by any story (a drop) and anything in
+   a story that isn't traceable to the design (an addition) — neither should happen silently.
+6. Do not write stories so broad that "acceptance criteria" amounts to "implement the feature" —
+   if a story can't be falsified by a reviewer, it's not specific enough yet.
+
+OUTPUT FORMAT:
+## Stories
+### [Story title]
+- **Traces to:** PRD requirement [X], Design Doc section [Y]
+- **Acceptance criteria:** [specific, testable]
+- **Test Strategy layers owned:** [unit/integration/contract/e2e/NFR — which ones]
+- **Depends on:** [other story, if any]
+
+[repeat per story]
+
+## Coverage Check
+- PRD requirements covered: [list, with story references]
+- Design Doc elements covered: [list, with story references]
+- Dropped (in design, not in any story): [list, or "none found"]
+- Added (in a story, not traceable to design): [list, or "none found"]
+
+## Suggested Implementation Order
+[sequenced list with dependency notes]
+```
+
+---
+
+## Stage 3 — Implementation (writing the code)
+
+*(Produces the actual diff for one Stage 2e story at a time. Run the PR-time review below as a SEPARATE agent session afterward — never let the implementing agent review its own work; it shares the same blind spots that produced the code in the first place.)*
+
+```
+You are implementing one approved Jira story as production code in this repository. The story is
+your primary unit of work — the Design Doc and PRD are supporting context for the "why," not
+something to re-scope from. Your job is to follow the story's acceptance criteria faithfully —
+flag and stop for anything ambiguous rather than guessing.
+
+CONTEXT:
+- Story to implement (with acceptance criteria, from Stage 2e): [paste — REQUIRED]
+- Approved Design Doc: [paste link/content — REQUIRED, for the "why" behind this story]
 - ADR(s): [paste, if any]
 - Stage 1 Impact Map: [paste link/content]
 - Stage 2d Test Strategy: [paste link/content — REQUIRED]
-- Linked Jira story/task: [paste]
 - Relevant repo(s): [paths — include ALL repos if this spans services]
 
 INSTRUCTIONS:
-1. Read the full Design Doc and ADR before writing any code. If anything in the design is
-   underspecified for implementation (e.g. it says "validate input" without specifying rules,
-   or names a field that doesn't exist in the current schema), STOP and ask rather than inventing
-   a decision — log it under "Clarifications Needed" instead of silently choosing.
-2. Before changing any function/module, find and read its current callers across the codebase
+1. Read the story's acceptance criteria first — that's the specific contract for this unit of
+   work. Read the Design Doc and ADR for context on why, but implement to the story's stated
+   criteria, not a broader interpretation of the design. If the story's scope seems to leave out
+   something the design implies it needs, flag it rather than silently expanding the story.
+2. If anything in the story or design is underspecified for implementation (e.g. it says
+   "validate input" without specifying rules, or names a field that doesn't exist in the current
+   schema), STOP and ask rather than inventing a decision — log it under "Clarifications Needed"
+   instead of silently choosing.
+3. Before changing any function/module, find and read its current callers across the codebase
    (not just the file you're editing) — this is the same check Stage 1 did at the idea level;
    redo it now at the code level, since the design may have evolved since Stage 1.
-3. Follow existing patterns in the codebase for error handling, logging, and testing — match the
+4. Follow existing patterns in the codebase for error handling, logging, and testing — match the
    conventions already present in neighboring files, don't introduce a new style.
-4. Implement every NFR item the design specified as concrete code, not a comment promising it
+5. Implement every NFR item relevant to this story as concrete code, not a comment promising it
    later: add the actual metric/log call, the actual input validation, the actual migration
    script — whatever the NFR section committed to.
-5. Implement the test pyramid exactly as scoped in the Stage 2d Test Strategy — unit, integration,
-   contract, e2e, NFR verification — at the layers it specifies. Do not invent additional test
-   scope beyond the plan, and do not skip a layer the plan called for. If you find the plan is
+6. Implement the test pyramid layer(s) this story is responsible for, exactly as scoped in the
+   Stage 2d Test Strategy and called out on the story itself. Do not invent additional test scope
+   beyond the plan, and do not skip a layer the story/plan called for. If you find the plan is
    wrong or insufficient once you're in the actual code (e.g. a contract test the plan didn't
    anticipate is clearly needed), flag it under "Clarifications Needed" rather than silently
    deciding for yourself.
-6. Do not silently expand scope beyond the Design Doc. If you notice an adjacent improvement
-   worth making, note it separately rather than including it in this diff.
-7. Use temporary scratch files/scripts if useful for working through the implementation, but
+7. Do not silently expand scope beyond this story. If you notice an adjacent improvement worth
+   making, note it separately rather than including it in this diff.
+8. Use temporary scratch files/scripts if useful for working through the implementation, but
    leave the final repository clean — remove scratch files before finishing, unless you flag a
    reason to keep one (e.g. a migration verification script the team should keep).
 
@@ -378,24 +506,24 @@ OUTPUT FORMAT:
 ## Implementation Summary
 [what was built, file by file, in plain language]
 
-## Design Conformance Self-Check
-- [design requirement] — implemented at [file:line]
+## Acceptance Criteria Self-Check
+- [acceptance criterion from story] — implemented at [file:line]
 
 ## Clarifications Needed
-[anything underspecified in the design that you stopped on instead of guessing — should block
-merge until the architect answers, not be silently resolved]
+[anything underspecified in the story/design that you stopped on instead of guessing — should
+block merge until the architect/PM answers, not be silently resolved]
 
 ## NFR Implementation Evidence
-- [NFR item from design] — [file:line of actual code implementing it]
+- [NFR item relevant to this story] — [file:line of actual code implementing it]
 
-## Tests Added/Updated (per Stage 2d Test Strategy)
-[file paths, what each test verifies, which layer of the plan it satisfies]
+## Tests Added/Updated (per story's assigned Test Strategy layers)
+[file paths, what each test verifies, which layer it satisfies]
 
 ## Test Plan Deviations
 [anything where you found the Stage 2d plan needed adjustment, flagged rather than silently changed]
 
 ## Scope Check
-[Confirmed: matches Design Doc scope / Flagged: see adjacent-improvement notes above]
+[Confirmed: matches story scope / Flagged: see adjacent-improvement notes above]
 
 ## Ready for Independent PR Review
 [Yes / No — if no, why]
