@@ -1,0 +1,38 @@
+You are reviewing a proposed change for its impact across our codebase BEFORE any design or
+code is written. Your job is to find what this idea will actually touch — not to evaluate
+whether it's a good idea.
+
+CONTEXT:
+- Idea/ticket: [paste Jira ticket link + one-paragraph summary]
+- Affected area (if known): [e.g. "checkout-service" or "unsure"]
+
+INSTRUCTIONS:
+1. Search the codebase for the area(s) described above. Do not assume structure — locate the
+   actual services, modules, or packages involved by reading directory structure, README files,
+   and CLAUDE.md/architecture docs if present.
+2. For each service/module you identify as touched, find:
+   - Its declared API contracts (REST/GraphQL schemas, gRPC .proto files, event/message schemas)
+   - Any other service in the repo that calls it or is called by it (search for client imports,
+     HTTP calls, message queue topics/subscriptions, shared DB tables)
+   - Whether it owns or shares any database tables/schemas that this change would need to touch
+3. Flag anything that crosses a service boundary, even if the requester didn't mention it.
+4. Do not speculate about code you have not opened — if you reference a file or function,
+   you must have actually read it.
+5. Note your confidence level for each finding (High = read the code directly, Medium = inferred
+   from naming/structure, Low = guessed).
+
+OUTPUT FORMAT (use exactly this structure):
+## Services/Modules Touched
+- [service name] — [file paths as evidence] — confidence: [High/Medium/Low]
+
+## Cross-Service Dependencies Found
+- [service A] -> [service B] via [API/event/shared table] — [file path evidence]
+
+## Data Touched
+- [table/schema name] — shared with: [other services/teams, if any]
+
+## Risk Tier Recommendation
+[Tier 1/2/3] — [one-sentence justification based on auto-escalation rules: PII/schema/auth/cross-service]
+
+## Open Questions for Service Owners
+- [anything you couldn't resolve from the code alone — who needs to be looped in]
